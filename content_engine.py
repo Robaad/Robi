@@ -238,6 +238,9 @@ class ContentEngine:
         # Parsear respuesta
         texto_respuesta = response.choices[0].message.content
         secciones = self._extraer_secciones(texto_respuesta)
+        max_secciones = self._resolver_max_secciones(tipo, extension)
+        if max_secciones and len(secciones) > max_secciones:
+            secciones = secciones[:max_secciones]
         
         return {
             'secciones': secciones,
@@ -323,6 +326,37 @@ Texto directo sin markdown ni asteriscos. Solo párrafos bien estructurados y se
             "completo": (400, 800),
             "extenso": (700, 1100),
         }.get(extension, (400, 800))
+
+    def _resolver_max_secciones(self, tipo: str, extension: str) -> int:
+        max_secciones_por_tipo = {
+            "programacion_didactica": {
+                "breve": 8,
+                "medio": 10,
+                "completo": 12,
+                "extenso": 14,
+            },
+            "investigacion": {
+                "breve": 6,
+                "medio": 8,
+                "completo": 10,
+                "extenso": 12,
+            },
+            "tfg": {
+                "breve": 6,
+                "medio": 7,
+                "completo": 8,
+                "extenso": 10,
+            },
+            "general": {
+                "breve": 4,
+                "medio": 8,
+                "completo": 10,
+                "extenso": 12,
+            },
+        }
+        return max_secciones_por_tipo.get(tipo, max_secciones_por_tipo["general"]).get(
+            extension, max_secciones_por_tipo["general"]["completo"]
+        )
     
     async def _necesita_refinamiento(self, contenido: str, extension: str = "completo") -> bool:
         """Detecta si el contenido es demasiado genérico o vacío."""
