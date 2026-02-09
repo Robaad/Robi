@@ -80,7 +80,7 @@ if __name__ == "__main__":
     async def studio_wrapper(update, context):
         await crear_studio_command(update, context, client, config)
 
-    app.add_handler(CommandHandler("studio", studio_wrapper))
+    app.add_handler(CommandHandler(["studio", "sudio"], studio_wrapper))
     app.add_handler(CommandHandler(["oportunidades", "inversiones", "evaluar", "ip", "deep"], command_wrapper))
     
 

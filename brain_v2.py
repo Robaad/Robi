@@ -12,6 +12,7 @@ import os
 import logging
 import re
 import asyncio
+import unicodedata
 from datetime import datetime, timedelta
 from docx import Document
 from telegram import Update, ReplyKeyboardMarkup
@@ -38,6 +39,84 @@ from evaluador_profesional import EvaluadorProfesionalCartera, formatear_informe
 esperando_empresa_deep = {}
 esperando_mercado_oportunidades = {}
 ESPERANDO_PROMPT_STUDIO = {}
+
+STUDIO_TIPOS = [
+    {
+        "id": "estudio_academico",
+        "label": "Estudio académico",
+        "keywords": ["estudio academico", "academico", "académico"],
+    },
+    {
+        "id": "informe_profesional",
+        "label": "Informe profesional",
+        "keywords": ["informe profesional", "profesional"],
+    },
+    {
+        "id": "reporte_tecnico",
+        "label": "Reporte técnico",
+        "keywords": ["reporte tecnico", "técnico", "tecnico"],
+    },
+    {
+        "id": "resumen_ejecutivo",
+        "label": "Resumen ejecutivo",
+        "keywords": ["resumen ejecutivo", "ejecutivo", "resumen"],
+    },
+    {
+        "id": "investigacion_mercado",
+        "label": "Investigación de mercado",
+        "keywords": ["investigacion de mercado", "investigación de mercado", "mercado"],
+    },
+]
+
+STUDIO_TONOS = [
+    {"id": "formal", "label": "Formal", "keywords": ["formal"]},
+    {"id": "academico", "label": "Académico", "keywords": ["academico", "académico"]},
+    {"id": "informativo", "label": "Informativo", "keywords": ["informativo"]},
+    {"id": "divulgativo", "label": "Divulgativo", "keywords": ["divulgativo"]},
+    {"id": "creativo", "label": "Creativo", "keywords": ["creativo"]},
+    {"id": "persuasivo", "label": "Persuasivo", "keywords": ["persuasivo"]},
+]
+
+STUDIO_EXTENSION = [
+    {"id": "corto", "label": "Corto (1-2 páginas)", "keywords": ["corto", "breve"]},
+    {"id": "medio", "label": "Medio (3-5 páginas)", "keywords": ["medio", "intermedio"]},
+    {"id": "largo", "label": "Largo (6-10 páginas)", "keywords": ["largo"]},
+    {"id": "extenso", "label": "Extenso (+10 páginas)", "keywords": ["extenso", "muy largo"]},
+]
+
+STUDIO_NIVEL = [
+    {"id": "introductorio", "label": "Introductorio", "keywords": ["introductorio", "basico", "básico"]},
+    {"id": "intermedio", "label": "Intermedio", "keywords": ["intermedio", "medio"]},
+    {"id": "avanzado", "label": "Avanzado", "keywords": ["avanzado", "experto"]},
+]
+
+
+def _normalizar_texto(texto: str) -> str:
+    texto = texto.strip().lower()
+    return "".join(
+        caracter
+        for caracter in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(caracter) != "Mn"
+    )
+
+
+def _seleccionar_opcion(texto: str, opciones: list) -> dict | None:
+    texto_norm = _normalizar_texto(texto)
+    match = re.match(r"^(\d+)", texto_norm)
+    if match:
+        indice = int(match.group(1)) - 1
+        if 0 <= indice < len(opciones):
+            return opciones[indice]
+
+    for opcion in opciones:
+        if any(keyword in texto_norm for keyword in opcion["keywords"]):
+            return opcion
+
+    for opcion in opciones:
+        if _normalizar_texto(opcion["label"]) == texto_norm:
+            return opcion
+
+    return None
 
 # Modelos
 MODELO_CONVERSACION = "mistral-small-latest"  # Para chat normal
@@ -468,7 +547,7 @@ async def configurar_comandos(app):
         ("oportunidades", "Buscar oportunidades de inversión"),
         ("ip", "Consultar IP pública"),
         ("deep", "Análisis profundo de valor"),
-        ("studio", "Generar estudio académico")
+        ("studio", "Generar informe/estudio")
     ]
     await app.bot.set_my_commands(comandos)
 
@@ -483,14 +562,15 @@ async def crear_studio_command(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data['config'] = config
     
     ESPERANDO_PROMPT_STUDIO[user_id] = True
-    
+    context.user_data["studio_flow"] = {"step": "tipo", "data": {}}
+
+    opciones_texto = "\n".join(
+        f"{indice}. {opcion['label']}" for indice, opcion in enumerate(STUDIO_TIPOS, start=1)
+    )
     await update.message.reply_text(
         "📝 **Modo Studio Activado**\n\n"
-        "Envíame el tema del estudio. Ejemplos:\n"
-        "• Programación didáctica de Desarrollo Web en DAW\n"
-        "• Estudio sobre ciberseguridad en empresas\n"
-        "• TFG sobre inteligencia artificial en sanidad\n\n"
-        "Puedes especificar tipo y nivel si quieres."
+        "Primero elige el tipo de informe/estudio (número o texto):\n"
+        f"{opciones_texto}"
     )
 
 
@@ -500,22 +580,137 @@ async def recibir_prompt_studio(update, context, client, config):
     
     if user_id not in ESPERANDO_PROMPT_STUDIO:
         return False
-    
-    prompt = update.message.text
+
+    studio_flow = context.user_data.get("studio_flow")
+    user_text = update.message.text
+
+    if not studio_flow:
+        prompt = user_text
+    else:
+        paso = studio_flow.get("step")
+        datos = studio_flow.get("data", {})
+
+        if paso == "tipo":
+            seleccion = _seleccionar_opcion(user_text, STUDIO_TIPOS)
+            if not seleccion:
+                opciones_texto = "\n".join(
+                    f"{indice}. {opcion['label']}" for indice, opcion in enumerate(STUDIO_TIPOS, start=1)
+                )
+                await update.message.reply_text(
+                    "No he podido identificar el tipo. Responde con un número o texto:\n"
+                    f"{opciones_texto}"
+                )
+                return True
+            datos["tipo"] = seleccion
+            studio_flow["step"] = "tono"
+            studio_flow["data"] = datos
+            opciones_texto = "\n".join(
+                f"{indice}. {opcion['label']}" for indice, opcion in enumerate(STUDIO_TONOS, start=1)
+            )
+            await update.message.reply_text(
+                "Perfecto. Ahora elige el tono del informe:\n"
+                f"{opciones_texto}"
+            )
+            return True
+
+        if paso == "tono":
+            seleccion = _seleccionar_opcion(user_text, STUDIO_TONOS)
+            if not seleccion:
+                opciones_texto = "\n".join(
+                    f"{indice}. {opcion['label']}" for indice, opcion in enumerate(STUDIO_TONOS, start=1)
+                )
+                await update.message.reply_text(
+                    "No he podido identificar el tono. Responde con un número o texto:\n"
+                    f"{opciones_texto}"
+                )
+                return True
+            datos["tono"] = seleccion
+            studio_flow["step"] = "extension"
+            studio_flow["data"] = datos
+            opciones_texto = "\n".join(
+                f"{indice}. {opcion['label']}" for indice, opcion in enumerate(STUDIO_EXTENSION, start=1)
+            )
+            await update.message.reply_text(
+                "Genial. ¿Qué extensión prefieres?\n"
+                f"{opciones_texto}"
+            )
+            return True
+
+        if paso == "extension":
+            seleccion = _seleccionar_opcion(user_text, STUDIO_EXTENSION)
+            if not seleccion:
+                opciones_texto = "\n".join(
+                    f"{indice}. {opcion['label']}" for indice, opcion in enumerate(STUDIO_EXTENSION, start=1)
+                )
+                await update.message.reply_text(
+                    "No he podido identificar la extensión. Responde con un número o texto:\n"
+                    f"{opciones_texto}"
+                )
+                return True
+            datos["extension"] = seleccion
+            studio_flow["step"] = "nivel"
+            studio_flow["data"] = datos
+            opciones_texto = "\n".join(
+                f"{indice}. {opcion['label']}" for indice, opcion in enumerate(STUDIO_NIVEL, start=1)
+            )
+            await update.message.reply_text(
+                "¿Nivel de profundidad?\n"
+                f"{opciones_texto}"
+            )
+            return True
+
+        if paso == "nivel":
+            seleccion = _seleccionar_opcion(user_text, STUDIO_NIVEL)
+            if not seleccion:
+                opciones_texto = "\n".join(
+                    f"{indice}. {opcion['label']}" for indice, opcion in enumerate(STUDIO_NIVEL, start=1)
+                )
+                await update.message.reply_text(
+                    "No he podido identificar el nivel. Responde con un número o texto:\n"
+                    f"{opciones_texto}"
+                )
+                return True
+            datos["nivel"] = seleccion
+            studio_flow["step"] = "prompt"
+            studio_flow["data"] = datos
+            await update.message.reply_text(
+                "¡Listo! Ahora envíame el tema y requisitos específicos del informe."
+            )
+            return True
+
+        if paso == "prompt":
+            prompt = user_text
+        else:
+            prompt = user_text
+
+    datos = (studio_flow or {}).get("data", {})
+    preferencias = [
+        f"- Tipo: {datos.get('tipo', {}).get('label', 'No especificado')}",
+        f"- Tono: {datos.get('tono', {}).get('label', 'No especificado')}",
+        f"- Extensión: {datos.get('extension', {}).get('label', 'No especificado')}",
+        f"- Profundidad: {datos.get('nivel', {}).get('label', 'No especificado')}",
+    ]
+    prompt_final = (
+        f"{prompt}\n\nPreferencias:\n" + "\n".join(preferencias)
+    )
+
+    context.user_data.pop("studio_flow", None)
     del ESPERANDO_PROMPT_STUDIO[user_id]
-    
+
     await update.message.reply_text(
         "🚀 **Agente Studio V2 iniciado**\n\n"
-        "Voy a generar un estudio profesional con:\n"
+        "Voy a generar un informe profesional con:\n"
         "✅ Estructura optimizada\n"
         "✅ Contenido denso y específico\n"
         "✅ Validación de calidad\n\n"
         "Te iré informando del progreso. Esto puede tardar varios minutos..."
     )
-    
+
     # CRÍTICO: context.application.create_task para que se ejecute en background
-    context.application.create_task(agente_estudio_mejorado(prompt, update.effective_chat.id, context, config, client))
-        
+    context.application.create_task(
+        agente_estudio_mejorado(prompt_final, update.effective_chat.id, context, config, client)
+    )
+
     return True
 
 
