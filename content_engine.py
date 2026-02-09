@@ -179,7 +179,11 @@ class ContentEngine:
                 for intento in range(2):
                     try:
                         # Al refinar, pedimos que mantenga la sustancia pero mejore el texto
-                        contenido_final = await self._refinar_contenido(contenido_final, seccion)
+                        contenido_final = await self._refinar_contenido(
+                            contenido_final,
+                            seccion,
+                            extension=extension
+                        )
                         break
                     except Exception as e:
                         if "429" in str(e) and intento == 0:
@@ -281,7 +285,7 @@ Si la sección contiene datos numéricos, comparativas o jerarquías, DEBES incl
 
 REQUISITOS:
 1. Contenido denso, profesional y específico
-2. Mínimo {min_palabras} palabras, máximo {max_palabras}
+2. Mínimo {min_palabras} palabras, máximo {max_palabras} (no excedas el máximo)
 3. Datos concretos, no generalidades
 4. Coherencia con lo ya escrito
 5. Citas y referencias obligatorias
@@ -308,6 +312,7 @@ Texto directo sin markdown ni asteriscos. Solo párrafos bien estructurados y se
         
         # Limpiar formato
         contenido = self._limpiar_formato(contenido)
+        contenido = self._recortar_contenido(contenido, max_palabras)
         
         return contenido
 
@@ -349,7 +354,7 @@ Texto directo sin markdown ni asteriscos. Solo párrafos bien estructurados y se
         
         return False
     
-    async def _refinar_contenido(self, contenido: str, seccion: str) -> str:
+    async def _refinar_contenido(self, contenido: str, seccion: str, extension: str | None = None) -> str:
         """Refina contenido genérico o vacío."""
         
         prompt = f"""Este contenido sobre "{seccion}" es demasiado genérico:
@@ -372,8 +377,12 @@ Responde solo con el texto mejorado, sin comentarios.
             messages=[{"role": "user", "content": prompt}],
             temperature=0.6
         )
-        
-        return self._limpiar_formato(response.choices[0].message.content)
+
+        contenido_mejorado = self._limpiar_formato(response.choices[0].message.content)
+        if extension:
+            _, max_palabras = self._resolver_rango_palabras(extension)
+            contenido_mejorado = self._recortar_contenido(contenido_mejorado, max_palabras)
+        return contenido_mejorado
     
     def _limpiar_formato(self, texto: str) -> str:
         """Limpia markdown y formato innecesario."""
@@ -382,6 +391,14 @@ Responde solo con el texto mejorado, sin comentarios.
         texto = texto.replace('```', '')
         texto = re.sub(r'\n{3,}', '\n\n', texto)  # Max 2 saltos de línea
         return texto.strip()
+
+    def _recortar_contenido(self, texto: str, max_palabras: int) -> str:
+        """Limita el contenido a un máximo de palabras sin cortar frases bruscamente."""
+        palabras = texto.split()
+        if len(palabras) <= max_palabras:
+            return texto
+        recorte = " ".join(palabras[:max_palabras])
+        return recorte.rstrip() + "."
     
     def _extraer_secciones(self, texto: str) -> List[str]:
         """Extrae títulos de secciones del texto."""
