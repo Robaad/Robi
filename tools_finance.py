@@ -29,7 +29,7 @@ def analizar_inversiones():
                      
         # --- BLOQUE ENCABEZADO (Dólar y Oro) ---
         try:
-            hora_actual = df.iloc[0,17]
+            hora_actual = df.iloc[0,20]
             hora_actual = str(hora_actual).split('.')[0]
 
             # DÓLAR (X2, Y2) -> Pandas Fila 0, Col 23, 24
