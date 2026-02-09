@@ -1046,7 +1046,11 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
                     text=f"🔄 Refinando contenido..."
                 )
                 try:
-                    contenido = await engine._refinar_contenido(contenido, seccion)
+                    contenido = await engine._refinar_contenido(
+                        contenido,
+                        seccion,
+                        extension=extension
+                    )
                 except:
                     pass
             

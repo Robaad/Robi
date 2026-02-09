@@ -152,8 +152,9 @@ TEXTO:
 REGLAS:
 1. Si hay pasos, fases o secuencia, usa tipo "diagrama_flujo" con lista ordenada.
 2. Si hay conceptos y relaciones, usa tipo "mapa_conceptual" con nodo central y nodos relacionados.
-3. Responde SOLO en formato JSON.
-4. Si NO hay material visualizable, responde: {{"tiene_visual": false}}
+3. Mantén los textos de nodos/pasos cortos (máx. 6-8 palabras) y no más de 6 elementos.
+4. Responde SOLO en formato JSON.
+5. Si NO hay material visualizable, responde: {{"tiene_visual": false}}
 
 Formato si hay visual:
 {{
@@ -297,6 +298,15 @@ class GeneradorVisuales:
     """Genera diagramas e ilustraciones conceptuales con matplotlib."""
 
     @staticmethod
+    def _formatear_texto(texto: str, max_chars: int, ancho_linea: int) -> str:
+        import textwrap
+
+        texto = texto.strip()
+        if len(texto) > max_chars:
+            texto = textwrap.shorten(texto, width=max_chars, placeholder="…")
+        return textwrap.fill(texto, width=ancho_linea)
+
+    @staticmethod
     def _render_diagrama_flujo(titulo: str, elementos: List[str]) -> BytesIO:
         fig, ax = plt.subplots(figsize=(8, max(4, len(elementos) * 1.2)))
         ax.axis('off')
@@ -318,7 +328,9 @@ class GeneradorVisuales:
                 facecolor='#EAF2F8'
             )
             ax.add_patch(rect)
-            ax.text(0.5, y, texto, ha='center', va='center', fontsize=10, wrap=True)
+            texto_formateado = GeneradorVisuales._formatear_texto(texto, max_chars=60, ancho_linea=28)
+            fontsize = 9 if len(texto_formateado) > 40 else 10
+            ax.text(0.5, y, texto_formateado, ha='center', va='center', fontsize=fontsize, wrap=True)
 
             if idx < min(len(elementos), 6) - 1:
                 ax.annotate(
@@ -344,7 +356,8 @@ class GeneradorVisuales:
 
         centro = (0.5, 0.5)
         ax.add_patch(patches.Circle(centro, 0.12, color='#D6EAF8', ec='#2E86C1', lw=2))
-        ax.text(centro[0], centro[1], nodo_central or 'Concepto', ha='center', va='center', fontsize=11)
+        nodo_central = GeneradorVisuales._formatear_texto(nodo_central or 'Concepto', max_chars=40, ancho_linea=14)
+        ax.text(centro[0], centro[1], nodo_central, ha='center', va='center', fontsize=10)
 
         radio = 0.32
         nodos = nodos[:6]
@@ -363,7 +376,9 @@ class GeneradorVisuales:
                 edgecolor='#27AE60',
                 facecolor='#E8F8F5'
             ))
-            ax.text(x, y, nodo, ha='center', va='center', fontsize=9, wrap=True)
+            nodo_formateado = GeneradorVisuales._formatear_texto(nodo, max_chars=36, ancho_linea=16)
+            fontsize = 8 if len(nodo_formateado) > 30 else 9
+            ax.text(x, y, nodo_formateado, ha='center', va='center', fontsize=fontsize, wrap=True)
 
         ax.set_title(titulo, fontsize=13, fontweight='bold', pad=12)
 
