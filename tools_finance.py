@@ -3,6 +3,7 @@ import logging
 from mistralai import Mistral
 from datetime import datetime
 import os
+import asyncio
 
 # Estos los importamos del main o de un config compartido luego
 # Por ahora los definimos aquí para que el módulo sea funcional
@@ -117,7 +118,7 @@ async def realizar_deep_research(nombre_valor: str, client, buscar_internet):
         
         contexto_acumulado = ""
         for q in queries:
-            res = buscar_internet(q)
+            res = await asyncio.to_thread(buscar_internet, q)
             contexto_acumulado += f"\n--- INFO DE: {q} ---\n{res}\n"
 
         # FASE 2: Super Prompt de Análisis
@@ -141,7 +142,8 @@ async def realizar_deep_research(nombre_valor: str, client, buscar_internet):
         """
 
         # Usamos Mistral Large con temperatura baja para máxima precisión
-        response = client.chat.complete(
+        response = await asyncio.to_thread(
+            client.chat.complete,
             model=MODELO_LISTO,
             messages=[{"role": "user", "content": prompt_pro}],
             temperature=0.1
@@ -162,7 +164,7 @@ async def buscar_oportunidades_inversion(mercado: str, client, buscar_internet):
             query = "mejores acciones ibex 35 con potencial crecimiento 2026 dividendos y analistas"
 
         # 1. Buscamos en la web
-        contexto = buscar_internet(query)
+        contexto = await asyncio.to_thread(buscar_internet, query)
 
         # 2. Le pedimos a Mistral Large que actúe como un Stock Picker
         prompt = f"""
@@ -180,7 +182,8 @@ async def buscar_oportunidades_inversion(mercado: str, client, buscar_internet):
         ⚠️ Sé muy selectivo. Si no hay datos claros, adviértelo.
         """
 
-        res = client.chat.complete(
+        res = await asyncio.to_thread(
+            client.chat.complete,
             model=MODELO_LISTO,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3

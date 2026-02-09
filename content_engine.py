@@ -9,6 +9,7 @@ Este módulo gestiona la generación de contenido complejo usando:
 """
 
 import logging
+import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 import re
@@ -214,7 +215,8 @@ class ContentEngine:
         template = templates.get(tipo, self._template_general)
         prompt = template(tema, nivel, extension)
         
-        response = self.client.chat.complete(
+        response = await asyncio.to_thread(
+            self.client.chat.complete,
             model=self.modelo,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3  # Baja para estructura consistente
@@ -283,7 +285,8 @@ FORMATO DE SALIDA:
 Texto directo sin markdown ni asteriscos. Solo párrafos bien estructurados y se deben citar todas las fuentes de los datos que se utilicen.
 """
         
-        response = self.client.chat.complete(
+        response = await asyncio.to_thread(
+            self.client.chat.complete,
             model=self.modelo,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5  # Media para balance creatividad/precisión
@@ -341,7 +344,8 @@ TAREA: Reescríbelo haciendo lo siguiente:
 Responde solo con el texto mejorado, sin comentarios.
 """
         
-        response = self.client.chat.complete(
+        response = await asyncio.to_thread(
+            self.client.chat.complete,
             model=self.modelo,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.6
@@ -678,4 +682,3 @@ Formato: directo, sin rodeos, como si fuera para un cliente.
         )
         
         return response.choices[0].message.content
-

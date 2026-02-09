@@ -216,7 +216,9 @@ async def procesar_comandos(texto_ai: str, client, config) -> str:
         if match:
             query = match.group(1)
             logging.info(f"🔍 Ejecutando búsqueda: {query}")
-            resultado = buscar_internet(query, client, config, MODELO_GENERACION)
+            resultado = await asyncio.to_thread(
+                buscar_internet, query, client, config, MODELO_GENERACION
+            )
             respuesta = texto_ai.replace(match.group(0), resultado)
     
     # ACCION (domótica)
@@ -229,7 +231,7 @@ async def procesar_comandos(texto_ai: str, client, config) -> str:
             if "toldo" in item.lower():
                 resultado = await control_toldos_sonoff(state.upper(), config)
             else:
-                resultado = control_openhab(item, state, config)
+                resultado = await asyncio.to_thread(control_openhab, item, state, config)
             
             respuesta = texto_ai.replace(match.group(0), resultado)
     
@@ -239,13 +241,13 @@ async def procesar_comandos(texto_ai: str, client, config) -> str:
         if match:
             titulo, fecha, hora = match.group(1), match.group(2), match.group(3)
             logging.info(f"📅 Creando evento: {titulo} - {fecha} {hora}")
-            resultado = crear_evento_calendar(titulo, fecha, hora)
+            resultado = await asyncio.to_thread(crear_evento_calendar, titulo, fecha, hora)
             respuesta = texto_ai.replace(match.group(0), resultado)
     
     # CONSULTAR: INVERSIONES
     if "CONSULTAR: 'INVERSIONES'" in texto_ai or "CONSULTAR: \"INVERSIONES\"" in texto_ai:
         logging.info("📊 Consultando inversiones...")
-        resultado = analizar_inversiones()
+        resultado = await asyncio.to_thread(analizar_inversiones)
         respuesta = texto_ai.replace("CONSULTAR: 'INVERSIONES'", resultado)
         respuesta = respuesta.replace("CONSULTAR: \"INVERSIONES\"", resultado)
     
@@ -273,7 +275,7 @@ async def procesar_comandos(texto_ai: str, client, config) -> str:
     # CONSULTAR: IP
     if "CONSULTAR: 'IP'" in texto_ai or "CONSULTAR: \"IP\"" in texto_ai:
         logging.info("🌐 Obteniendo IP...")
-        resultado = obtener_ip_publica()
+        resultado = await asyncio.to_thread(obtener_ip_publica)
         respuesta = texto_ai.replace("CONSULTAR: 'IP'", resultado)
         respuesta = respuesta.replace("CONSULTAR: \"IP\"", resultado)
     
@@ -286,7 +288,12 @@ async def procesar_comandos(texto_ai: str, client, config) -> str:
             # Aquí podrías usar el nuevo AnalisisFinanciero si quieres
             # Por ahora mantenemos la función original
             from tools_finance import super_asesor_financiero
-            resultado = super_asesor_financiero(valor, client, lambda q: buscar_internet(q, client, config, MODELO_GENERACION))
+            resultado = await asyncio.to_thread(
+                super_asesor_financiero,
+                valor,
+                client,
+                lambda q: buscar_internet(q, client, config, MODELO_GENERACION)
+            )
             respuesta = texto_ai.replace(match.group(0), resultado)
     
     return respuesta
@@ -393,7 +400,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
     elif user_text.startswith("/inversiones"):
         logging.info("📊 Comando /inversiones ejecutado directamente")
         try:
-            resultado = analizar_inversiones()
+            resultado = await asyncio.to_thread(analizar_inversiones)
             await enviar_mensaje_largo(update, resultado)
         except Exception as e:
             logging.error(f"Error en /inversiones: {e}")
@@ -423,7 +430,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
     # IP (ejecutar directamente sin pasar por IA)
     elif user_text.startswith("/ip"):
         logging.info("🌐 Comando /ip ejecutado directamente")
-        resultado = obtener_ip_publica()
+        resultado = await asyncio.to_thread(obtener_ip_publica)
         await update.message.reply_text(resultado)
         return
     

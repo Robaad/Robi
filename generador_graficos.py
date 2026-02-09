@@ -7,6 +7,7 @@ gráficos profesionales para insertar en documentos Word.
 
 import re
 import logging
+import asyncio
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Backend sin GUI para servidores
@@ -88,7 +89,8 @@ Responde SOLO el JSON, sin explicaciones.
 """
         
         try:
-            response = self.client.chat.complete(
+            response = await asyncio.to_thread(
+                self.client.chat.complete,
                 model=self.modelo,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
