@@ -146,7 +146,8 @@ class ContentEngine:
                         tema_global=tema,
                         contexto_previo=secciones_desarrolladas,
                         numero=i,
-                        total=len(estructura['secciones'])
+                        total=len(estructura['secciones']),
+                        extension=extension
                     )
                     break 
                     
@@ -174,7 +175,7 @@ class ContentEngine:
             # -------------------------------
 
             # Validar y refinar si es necesario
-            if await self._necesita_refinamiento(contenido_final):
+            if await self._necesita_refinamiento(contenido_final, extension):
                 for intento in range(2):
                     try:
                         # Al refinar, pedimos que mantenga la sustancia pero mejore el texto
@@ -245,7 +246,8 @@ class ContentEngine:
         tema_global: str, 
         contexto_previo: List[Dict],
         numero: int,
-        total: int
+        total: int,
+        extension: str = "completo"
     ) -> str:
         """Desarrolla una sección con contexto completo."""
         
@@ -257,6 +259,8 @@ class ContentEngine:
             for sec in ultimas_secciones:
                 resumen_previo += f"\n{sec['titulo']}: {sec['contenido'][:200]}...\n"
         
+        min_palabras, max_palabras = self._resolver_rango_palabras(extension)
+
         prompt = f"""Eres un experto redactor {self.perfil_redactor}.
 
 TAREA: Desarrollar la sección {numero} de {total} de un estudio sobre "{tema_global}"
@@ -277,7 +281,7 @@ Si la sección contiene datos numéricos, comparativas o jerarquías, DEBES incl
 
 REQUISITOS:
 1. Contenido denso, profesional y específico
-2. Mínimo 400 palabras, máximo 800
+2. Mínimo {min_palabras} palabras, máximo {max_palabras}
 3. Datos concretos, no generalidades
 4. Coherencia con lo ya escrito
 5. Citas y referencias obligatorias
@@ -306,8 +310,16 @@ Texto directo sin markdown ni asteriscos. Solo párrafos bien estructurados y se
         contenido = self._limpiar_formato(contenido)
         
         return contenido
+
+    def _resolver_rango_palabras(self, extension: str) -> tuple[int, int]:
+        return {
+            "breve": (180, 320),
+            "medio": (300, 520),
+            "completo": (400, 800),
+            "extenso": (700, 1100),
+        }.get(extension, (400, 800))
     
-    async def _necesita_refinamiento(self, contenido: str) -> bool:
+    async def _necesita_refinamiento(self, contenido: str, extension: str = "completo") -> bool:
         """Detecta si el contenido es demasiado genérico o vacío."""
         
         # Indicadores de contenido pobre
@@ -324,9 +336,11 @@ Texto directo sin markdown ni asteriscos. Solo párrafos bien estructurados y se
         palabras = len(contenido.split())
         cuenta_vacias = sum(1 for p in palabras_vacias if p in contenido.lower())
         cuenta_genericas = sum(1 for f in frases_genericas if f in contenido.lower())
+        min_palabras, _ = self._resolver_rango_palabras(extension)
+        umbral_palabras = max(150, int(min_palabras * 0.8))
         
         # Criterios de refinamiento
-        if palabras < 300:
+        if palabras < umbral_palabras:
             return True  # Demasiado corto
         if cuenta_vacias > 10:
             return True  # Demasiadas palabras vacías
@@ -402,6 +416,12 @@ Responde solo con el texto mejorado, sin comentarios.
     
     def _template_programacion_didactica(self, tema: str, nivel: str, extension: str) -> str:
         """Template para programaciones didácticas de FP."""
+        max_secciones = {
+            "breve": 8,
+            "medio": 10,
+            "completo": 12,
+            "extenso": 14,
+        }.get(extension, 12)
         return f"""Genera un ÍNDICE para una programación didáctica de {tema} en {nivel}.
 
 Debe incluir obligatoriamente (formato LOMLOE):
@@ -418,11 +438,18 @@ Debe incluir obligatoriamente (formato LOMLOE):
 11. Actividades complementarias y extraescolares
 
 Responde SOLO con el listado numerado de secciones, sin explicaciones.
-Máximo 12 secciones principales.
+Si la extensión es breve, fusiona apartados para no superar {max_secciones} secciones.
+Máximo {max_secciones} secciones principales.
 """
     
     def _template_investigacion(self, tema: str, nivel: str, extension: str) -> str:
         """Template para estudios de investigación."""
+        max_secciones = {
+            "breve": 6,
+            "medio": 8,
+            "completo": 10,
+            "extenso": 12,
+        }.get(extension, 10)
         return f"""Genera un ÍNDICE para un estudio de investigación sobre: {tema}
 
 Nivel académico: {nivel}
@@ -441,11 +468,17 @@ Estructura típica de investigación científica:
 11. Referencias bibliográficas
 
 Responde SOLO con el listado numerado adaptado a este tema específico.
-Máximo 10 secciones.
+Máximo {max_secciones} secciones.
 """
     
     def _template_tfg(self, tema: str, nivel: str, extension: str) -> str:
         """Template para Trabajos Fin de Grado/Máster."""
+        max_secciones = {
+            "breve": 6,
+            "medio": 7,
+            "completo": 8,
+            "extenso": 10,
+        }.get(extension, 8)
         return f"""Genera un ÍNDICE para un TFG/TFM sobre: {tema}
 
 Nivel: {nivel}
@@ -462,13 +495,13 @@ Estructura recomendada:
 9. Anexos (si procede)
 
 Responde SOLO con el listado numerado específico para este tema.
-Máximo 8 secciones principales.
+Máximo {max_secciones} secciones principales.
 """
     
     def _template_general(self, tema: str, nivel: str, extension: str) -> str:
         """Template genérico adaptable."""
         num_secciones = {
-            'breve': 5,
+            'breve': 4,
             'medio': 8,
             'completo': 10,
             'extenso': 12
