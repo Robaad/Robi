@@ -25,7 +25,7 @@ from content_engine import ContentEngine, AnalisisFinanciero
 
 # Importar herramientas existentes
 from tools_finance import (
-    analizar_inversiones, realizar_deep_research, 
+    analizar_inversiones,
     buscar_oportunidades_inversion
 )
 from tools_system import (
@@ -470,9 +470,12 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
             await update.message.reply_text("🔍 ¿Qué empresa quieres investigar?")
             return
         
-        await update.message.reply_text(f"🚀 Analizando {valor.upper()} en profundidad...\n\nEsto llevará unos minutos. Te aviso cuando termine.")
+        await update.message.reply_text(
+            f"🚀 Evaluando {valor.upper()} con análisis profesional...\n\n"
+            "Esto llevará unos minutos. Te aviso cuando termine."
+        )
         # CRÍTICO: context.application.create_task para que se ejecute en background
-        context.application.create_task(ejecutar_y_enviar_research(update, valor, client, config))
+        context.application.create_task(ejecutar_evaluacion_valor(update, valor, client, config))
         return
     
     # INVERSIONES (ejecutar directamente sin pasar por IA)
@@ -708,7 +711,14 @@ async def recibir_prompt_studio(update, context, client, config):
 
     # CRÍTICO: context.application.create_task para que se ejecute en background
     context.application.create_task(
-        agente_estudio_mejorado(prompt_final, update.effective_chat.id, context, config, client)
+        agente_estudio_mejorado(
+            prompt_final,
+            update.effective_chat.id,
+            context,
+            config,
+            client,
+            preferencias=datos,
+        )
     )
 
     return True
@@ -869,7 +879,50 @@ async def recibir_prompt_studio(update, context, client, config):
 #         logging.error(f"Error en agente_estudio_mejorado: {e}")
 #         await context.bot.send_message(chat_id=chat_id, text=f"❌ Error: {str(e)}")
 
-async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, client):
+def _resolver_tipo_estudio(prompt_usuario: str, preferencias: dict | None) -> str:
+    tipo_id = (preferencias or {}).get("tipo", {}).get("id")
+    prompt_lower = prompt_usuario.lower()
+
+    if tipo_id == "investigacion_mercado":
+        return "investigacion"
+
+    if tipo_id == "estudio_academico":
+        if "programación didáctica" in prompt_lower or "programacion didactica" in prompt_lower:
+            return "programacion_didactica"
+        if "tfg" in prompt_lower or "tfm" in prompt_lower:
+            return "tfg"
+        if "investigación" in prompt_lower or "investigacion" in prompt_lower:
+            return "investigacion"
+
+    return "general"
+
+
+def _resolver_extension_estudio(preferencias: dict | None) -> str:
+    extension_id = (preferencias or {}).get("extension", {}).get("id")
+    return {
+        "corto": "breve",
+        "medio": "medio",
+        "largo": "completo",
+        "extenso": "extenso",
+    }.get(extension_id, "completo")
+
+
+def _resolver_nivel_estudio(preferencias: dict | None) -> str:
+    nivel_label = (preferencias or {}).get("nivel", {}).get("label")
+    return nivel_label or "universitario"
+
+
+def _resolver_tono_estudio(preferencias: dict | None) -> str:
+    tono_label = (preferencias or {}).get("tono", {}).get("label")
+    return tono_label or "formal"
+
+
+def _resolver_perfil_redactor(preferencias: dict | None) -> str:
+    tipo_label = (preferencias or {}).get("tipo", {}).get("label")
+    return tipo_label or "académico"
+
+
+async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, client, preferencias=None):
     """
     Agente de estudio mejorado con generación REAL de gráficos.
     """
@@ -896,22 +949,24 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
         if prompt_usuario.lower().startswith('forzar:'):
             prompt_usuario = prompt_usuario[7:].strip()
         
-        # Parsear prompt para detectar tipo
-        tipo = "general"
-        if "programación didáctica" in prompt_usuario.lower() or "programacion didactica" in prompt_usuario.lower():
-            tipo = "programacion_didactica"
-        elif "tfg" in prompt_usuario.lower() or "tfm" in prompt_usuario.lower():
-            tipo = "tfg"
-        elif "investigación" in prompt_usuario.lower() or "investigacion" in prompt_usuario.lower():
-            tipo = "investigacion"
+        tipo = _resolver_tipo_estudio(prompt_usuario, preferencias)
+        extension = _resolver_extension_estudio(preferencias)
+        nivel = _resolver_nivel_estudio(preferencias)
+        tono = _resolver_tono_estudio(preferencias)
+        perfil_redactor = _resolver_perfil_redactor(preferencias)
         
         # FASE 1: Generar estructura
         await context.bot.send_message(chat_id=chat_id, text="🧠 **Fase 1: Analizando tema y generando estructura...**")
         
         from content_engine import ContentEngine
-        engine = ContentEngine(client, modelo_avanzado=MODELO_GENERACION)
+        engine = ContentEngine(
+            client,
+            modelo_avanzado=MODELO_GENERACION,
+            perfil_redactor=perfil_redactor,
+            tono=tono,
+        )
         
-        estructura = await engine._generar_estructura(prompt_usuario, tipo, "universitario", "completo")
+        estructura = await engine._generar_estructura(prompt_usuario, tipo, nivel, extension)
         
         await context.bot.send_message(
             chat_id=chat_id, 
@@ -935,7 +990,11 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
         # Portada
         doc.add_heading(f'ESTUDIO: {prompt_usuario[:80]}', 0)
         doc.add_paragraph(f"Generado el: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-        doc.add_paragraph(f"Tipo: {tipo.replace('_', ' ').title()}")
+        tipo_label = (preferencias or {}).get("tipo", {}).get("label")
+        doc.add_paragraph(f"Tipo: {tipo_label or tipo.replace('_', ' ').title()}")
+        doc.add_paragraph(f"Tono: {tono}")
+        doc.add_paragraph(f"Nivel: {nivel}")
+        doc.add_paragraph(f"Extensión: {extension}")
         doc.add_paragraph(f"Modelo: {MODELO_GENERACION}")
         doc.add_page_break()
         
@@ -1156,17 +1215,20 @@ async def ejecutar_evaluacion_cartera(update, client, config):
 
 
 
-async def ejecutar_y_enviar_research(update, valor, client, config):
-    """Ejecuta deep research y envía resultado."""
+async def ejecutar_evaluacion_valor(update, valor, client, config):
+    """Ejecuta evaluación profesional de un valor y envía resultado."""
     try:
-        resultado = await realizar_deep_research(
-            valor, 
-            client, 
-            lambda q: buscar_internet(q, client, config, MODELO_GENERACION)
+        from tools_system import buscar_internet
+        evaluador = EvaluadorProfesionalCartera(
+            client=client,
+            buscar_internet=lambda q: buscar_internet(q, client, config, MODELO_GENERACION),
+            modelo=MODELO_GENERACION
         )
-        await enviar_mensaje_largo(update, resultado)
+        resultado = await evaluador.evaluar_valor_unico(valor)
+        mensaje = formatear_informe_profesional(resultado)
+        await enviar_mensaje_largo(update, mensaje)
     except Exception as e:
-        logging.error(f"Error en deep research: {e}")
+        logging.error(f"Error en evaluación de valor: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 

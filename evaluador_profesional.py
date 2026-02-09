@@ -99,6 +99,47 @@ class EvaluadorProfesionalCartera:
                 'success': False,
                 'mensaje': f"Error: {str(e)}"
             }
+
+    async def evaluar_valor_unico(self, valor: str) -> Dict:
+        """
+        Evalúa un único valor con el mismo análisis multi-capa.
+        """
+        try:
+            nombre = valor.strip() or "Desconocido"
+            ticker = nombre.split()[0] if nombre else "UNK"
+            fecha_hoy = datetime.now().strftime("%d de %B de %Y")
+
+            precios_historicos = await self.buscador.obtener_serie_precios(ticker)
+            valor_actual = precios_historicos[-1] if precios_historicos else 0
+
+            evaluacion = await self._analizar_valor_completo(
+                nombre=nombre,
+                precio_compra=valor_actual,
+                num_acciones=0,
+                valor_actual=valor_actual,
+                ganancia_total=0,
+                pct_ganancia=0,
+                fecha=fecha_hoy
+            )
+
+            resumen = self._generar_resumen_ejecutivo([evaluacion])
+
+            return {
+                'success': True,
+                'fecha': fecha_hoy,
+                'total_posiciones': 1,
+                'resumen': resumen,
+                'evaluaciones': [evaluacion],
+                'metodologia': 'Análisis Multi-Capa: Técnico + Fundamental + Consenso + Sentimiento'
+            }
+        except Exception as e:
+            logging.error(f"Error evaluando valor único: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'success': False,
+                'mensaje': f"Error: {str(e)}"
+            }
     
     async def _analizar_valor_completo(
         self,
