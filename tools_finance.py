@@ -29,6 +29,7 @@ def analizar_inversiones():
                      
         # --- BLOQUE ENCABEZADO (Dólar y Oro) ---
         try:
+            hora_actual = df.iloc[0,17]
             # DÓLAR (X2, Y2) -> Pandas Fila 0, Col 23, 24
             val_dolar = df.iloc[0, 23]
             pct_dolar = df.iloc[0, 24] * 100
@@ -43,7 +44,8 @@ def analizar_inversiones():
             v_oro = float(val_oro) if pd.notna(val_oro) else 0.0
             p_oro = float(pct_oro) if pd.notna(pct_oro) else 0.0
 
-            header = f"💵 **Dólar:** {v_dol:.4f}€ ({p_dol:+.2f}%)\n"
+            header = f"📅 **Hora:** {hora_actual}\n"
+            header += f"💵 **Dólar:** {v_dol:.4f}€ ({p_dol:+.2f}%)\n"
             header += f"🟡 **Oro:** {v_oro:,.2f}$/oz ({p_oro:+.2f}%)\n"
             header += "—" * 15 + "\n"
         except Exception as e:
