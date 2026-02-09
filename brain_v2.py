@@ -904,7 +904,7 @@ def _resolver_extension_estudio(preferencias: dict | None) -> str:
         "medio": "medio",
         "largo": "completo",
         "extenso": "extenso",
-    }.get(extension_id, "completo")
+    }.get(extension_id, "breve")
 
 
 def _resolver_nivel_estudio(preferencias: dict | None) -> str:
@@ -1024,7 +1024,8 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
                         tema_global=prompt_usuario,
                         contexto_previo=secciones_desarrolladas,
                         numero=i,
-                        total=len(estructura['secciones'])
+                        total=len(estructura['secciones']),
+                        extension=extension
                     )
                     break
                 except Exception as e:
@@ -1039,7 +1040,7 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
                         contenido = "[Contenido no disponible por error de API]"
             
             # Validar y refinar
-            if contenido and await engine._necesita_refinamiento(contenido):
+            if contenido and await engine._necesita_refinamiento(contenido, extension):
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=f"🔄 Refinando contenido..."
