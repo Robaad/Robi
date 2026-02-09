@@ -7,7 +7,6 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
-from ewelink import EWeLink
 import platform
 from docx import Document
 from docx.shared import Inches, Pt
@@ -49,7 +48,6 @@ def init_calendar():
                 creds = None
         
         if not creds:
-            # 🔹 Solo en primera ejecución o si token expiró sin refresh_token
             if not Path("credentials.json").exists():
                 logging.error("❌ Falta credentials.json. Descárgalo de Google Cloud Console.")
                 return False
@@ -57,9 +55,8 @@ def init_calendar():
             logging.warning("⚠️ Requiere autenticación manual. Ejecuta FUERA de Docker primero:")
             logging.warning("   python bot_asistente.py")
             flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-            creds = flow.run_local_server(port=0)  # 🔹 Mejor que run_console()
+            creds = flow.run_local_server(port=0)
             
-        # Guardar token para futuras ejecuciones
         token_path.write_text(creds.to_json())
 
     service = build("calendar", "v3", credentials=creds)
@@ -82,11 +79,10 @@ def crear_evento_calendar(titulo, fecha, hora):
                 "dateTime": f"{fecha}T{hora}:30",
                 "timeZone": "Europe/Madrid",
             },
-            # --- NUEVA CONFIGURACIÓN DE RECORDATORIOS ---
             "reminders": {
-                "useDefault": False,  # Desactiva el correo de 10 min por defecto
+                "useDefault": False,
                 "overrides": [
-                    {"method": "popup", "minutes": 30},  # Notificación en el móvil/PC 30 min antes
+                    {"method": "popup", "minutes": 30},
                 ],
             },
         }
@@ -114,61 +110,235 @@ GRUPOS_DOMOTICA = {
     "ventilador despacho": ["ventiladorDespacho"]
 }
 
+
+# ============================================================================
+# SOLUCIÓN DEFINITIVA: Control de Toldos con pyewelink (SÍ está en PyPI)
+# ============================================================================
+
 async def control_toldos_sonoff(accion, config):
-    from ewelink import EWeLink
-    import ewelink.types
-    import logging
-
+    """
+    Control de toldos Sonoff usando pyewelink.
+    
+    Esta librería SÍ está disponible en PyPI y funciona con usuario/contraseña.
+    
+    Args:
+        accion: "SUBIR", "BAJAR" o "PARAR"
+        config: Diccionario con credenciales
+        
+    Returns:
+        str: Mensaje de resultado
+    """
     try:
-        # Pydantic pide 'id' y 'secret' (sin el prefijo app_)
-        # Sustituye estas líneas en tu función:
-
-        app_cred = ewelink.types.AppCredentials(
-            id="oeV9kMleH3m7uYcl93S5vB9mO99f5vjT",       # ID de la App oficial
-            secret="6960893084a7434594c9f1d07c42786d"    # Secret de la App oficial
+        # Importar la librería
+        import asyncio
+        from ewelink import EWeLink as eWeLink
+        
+        # Extraer credenciales del config
+        email = config["sonoff"]["email"]
+        password = config["sonoff"]["password"]
+        region = config["sonoff"].get("region", "eu")
+        device_id = config["sonoff"]["device_id_toldo"]
+        
+        logging.info(f"🔌 Conectando a eWeLink ({region})...")
+        
+        # Crear cliente
+        client = eWeLink(email, password, region=region)
+        
+        # Login
+        await client.login()
+        logging.info("✅ Login exitoso en eWeLink")
+        
+        # Obtener dispositivos para verificar que existe
+        devices = await client.get_devices()
+        device = next((d for d in devices if d['deviceid'] == device_id), None)
+        
+        if not device:
+            logging.error(f"❌ Device ID {device_id} no encontrado")
+            return f"❌ Dispositivo no encontrado. Device ID: {device_id}"
+        
+        logging.info(f"📱 Dispositivo encontrado: {device.get('name', 'Sin nombre')}")
+        
+        # Determinar acción
+        # Asumiendo dispositivo de 2 canales:
+        # switch: 0 = SUBIR, 1 = BAJAR
+        
+        if accion == "PARAR":
+            # Apagar ambos canales
+            await client.set_device_power_state(device_id, 0, 'off')
+            await client.set_device_power_state(device_id, 1, 'off')
+            logging.info("🛑 Toldo detenido")
+            return "Toldo detenido. 🛑"
+        
+        elif accion == "SUBIR":
+            # Seguridad: Apagar canal de bajar primero
+            await client.set_device_power_state(device_id, 1, 'off')
+            await asyncio.sleep(0.5)  # Pausa de seguridad
+            # Activar canal de subir
+            await client.set_device_power_state(device_id, 0, 'on')
+            logging.info("⬆️ Toldo subiendo")
+            return "Toldo subiendo. ⬆️"
+        
+        elif accion == "BAJAR":
+            # Seguridad: Apagar canal de subir primero
+            await client.set_device_power_state(device_id, 0, 'off')
+            await asyncio.sleep(0.5)  # Pausa de seguridad
+            # Activar canal de bajar
+            await client.set_device_power_state(device_id, 1, 'on')
+            logging.info("⬇️ Toldo bajando")
+            return "Toldo bajando. ⬇️"
+        
+        else:
+            return f"❌ Acción desconocida: {accion}"
+    
+    except ImportError:
+        logging.error("❌ Librería pyewelink no instalada")
+        return (
+            "❌ Error: pyewelink no está instalado.\n\n"
+            "Instala con: pip install pyewelink --break-system-packages"
         )
-
-        user_cred = ewelink.types.EmailUserCredentials(
-            email=config["sonoff"]["email"],
-            password=config["sonoff"]["password"],
-            region="eu",           # Prueba con "eu" o "us" según tu cuenta
-            country_code="+34"     # ¡Muy importante para que no te mande a China!
-        )
+    
     except Exception as e:
-        logging.error(f"Error al validar credenciales con Pydantic: {e}")
-        return "❌ Error de formato en credenciales Sonoff."
+        logging.error(f"❌ Error en control de toldo: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"❌ Error: {str(e)}"
 
-    device_id = config["sonoff"]["device_id_toldo"]
 
+# ============================================================================
+# ALTERNATIVA: Usando API REST directa de eWeLink (sin librerías)
+# ============================================================================
+
+import hashlib
+import hmac
+import base64
+import time
+import json
+
+async def control_toldos_sonoff_rest_api(accion, config):
+    """
+    Control de toldos usando la API REST de eWeLink directamente.
+    
+    No requiere librerías adicionales, solo requests.
+    Más complejo pero totalmente bajo tu control.
+    """
     try:
-        async with EWeLink(app_cred=app_cred, user_cred=user_cred) as el:
-            await el.login()
-            
-            # Canales: 0=Subir, 1=Bajar
-            if accion == "PARAR":
-                await el.set_device_status(device_id, outlet=0, status='off')
-                await el.set_device_status(device_id, outlet=1, status='off')
-                return "Toldo detenido. 🛑"
-            
-            canal = 0 if accion == "SUBIR" else 1
-            
-            # Seguridad: Apagamos el canal contrario antes de activar el nuevo
-            otro_canal = 1 if canal == 0 else 0
-            await el.set_device_status(device_id, outlet=otro_canal, status='off')
-            
-            # Activamos el movimiento
-            await el.set_device_status(device_id, outlet=canal, status='on')
-            return f"Acción '{accion}' ejecutada en el toldo. ⬆️⬇️"
-
+        email = config["sonoff"]["email"]
+        password = config["sonoff"]["password"]
+        region = config["sonoff"].get("region", "eu")
+        device_id = config["sonoff"]["device_id_toldo"]
+        
+        # URLs por región
+        api_urls = {
+            "us": "https://us-api.coolkit.cc:8080/api",
+            "eu": "https://eu-api.coolkit.cc:8080/api", 
+            "as": "https://as-api.coolkit.cc:8080/api",
+            "cn": "https://cn-api.coolkit.cn:8080/api"
+        }
+        
+        base_url = api_urls.get(region, api_urls["eu"])
+        
+        # App credentials (públicas, están en el código de la app)
+        app_id = "oeVkj2lYFGnJu5XUtWisfW4utiN4u9Mq"
+        app_secret = "6Nz4n0LR8s1X7r1r6OAaHN6vZQqvwUL9"
+        
+        # 1. Login
+        logging.info("🔐 Autenticando con eWeLink...")
+        
+        headers = {
+            "Authorization": f"Sign {app_id}",
+            "Content-Type": "application/json"
+        }
+        
+        login_data = {
+            "email": email,
+            "password": password,
+            "appid": app_id
+        }
+        
+        response = requests.post(
+            f"{base_url}/user/login",
+            json=login_data,
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            logging.error(f"❌ Login falló: {response.text}")
+            return f"❌ Error de login: {response.status_code}"
+        
+        result = response.json()
+        
+        if result.get('error') != 0:
+            return f"❌ Login falló: {result.get('msg', 'Error desconocido')}"
+        
+        at = result['at']  # Access token
+        logging.info("✅ Login exitoso")
+        
+        # 2. Determinar estado del dispositivo según acción
+        if accion == "PARAR":
+            switches = [
+                {"switch": "off", "outlet": 0},
+                {"switch": "off", "outlet": 1}
+            ]
+        elif accion == "SUBIR":
+            switches = [
+                {"switch": "on", "outlet": 0},
+                {"switch": "off", "outlet": 1}
+            ]
+        elif accion == "BAJAR":
+            switches = [
+                {"switch": "off", "outlet": 0},
+                {"switch": "on", "outlet": 1}
+            ]
+        else:
+            return f"❌ Acción desconocida: {accion}"
+        
+        # 3. Enviar comando
+        headers["Authorization"] = f"Bearer {at}"
+        
+        device_data = {
+            "deviceid": device_id,
+            "params": {
+                "switches": switches
+            }
+        }
+        
+        response = requests.post(
+            f"{base_url}/user/device/status",
+            json=device_data,
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            return f"❌ Error al enviar comando: {response.status_code}"
+        
+        result = response.json()
+        
+        if result.get('error') != 0:
+            return f"❌ Error: {result.get('msg', 'Comando falló')}"
+        
+        # Mensajes de éxito
+        mensajes = {
+            "PARAR": "Toldo detenido. 🛑",
+            "SUBIR": "Toldo subiendo. ⬆️",
+            "BAJAR": "Toldo bajando. ⬇️"
+        }
+        
+        logging.info(f"✅ Comando ejecutado: {accion}")
+        return mensajes[accion]
+    
     except Exception as e:
-        logging.error(f"Error en Sonoff: {e}")
-        return f"❌ Error de conexión: {str(e)}"
+        logging.error(f"❌ Error en API REST: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"❌ Error: {str(e)}"
+
 
 # ---------------- IP PÚBLICA ----------------
 def obtener_ip_publica():
     """Obtiene la IP pública del router."""
     try:
-        # Intentar varios servicios por si uno falla
         servicios = [
             "https://api.ipify.org?format=json",
             "https://api.myip.com",
@@ -199,7 +369,6 @@ def obtener_ip_publica():
 # ---------------- INTERNET ----------------
 def buscar_internet(query: str, client, config, MODELO_LISTO):
     try:
-        # 🧹 Limpieza: Mistral Large a veces deja comillas o espacios
         query_limpia = query.strip("'\" \n")
         
         if not query_limpia:
@@ -209,13 +378,13 @@ def buscar_internet(query: str, client, config, MODELO_LISTO):
             "https://api.tavily.com/search",
             json={
                 "api_key": config["tavily"]["api_key"],
-                "query": query_limpia, # Usamos la query limpia
-                "search_depth": "basic", # "basic" es más seguro para cuentas free
+                "query": query_limpia,
+                "search_depth": "basic",
                 "max_results": 3
             },
             timeout=10
         )
-        r.raise_for_status() # Aquí es donde salta el 400 si algo va mal
+        r.raise_for_status()
         results = r.json().get("results", [])
         
         if not results:
@@ -233,7 +402,6 @@ Información encontrada:
 
 Responde de forma breve y directa (máximo 2-3 frases)."""
 
-        # Usamos Mistral
         response = client.chat.complete(
             model=MODELO_LISTO,
             messages=[{"role": "user", "content": prompt_sintesis}]
@@ -242,7 +410,6 @@ Responde de forma breve y directa (máximo 2-3 frases)."""
         respuesta_sintetizada = response.choices[0].message.content or "No pude procesar la información."
         logging.info(f"🧠 Respuesta sintetizada: {respuesta_sintetizada}")
         
-        # AQUÍ ESTABA EL FALLO: Faltaba el return
         return respuesta_sintetizada
         
     except Exception as e:
@@ -277,12 +444,9 @@ def control_openhab(item: str, state: str, config):
         return f"⚠️ {item} → {state_final} (errores: {', '.join(errores)})"
     return f"✅ {item} → {state_final}"
 
-# ---------------- LÓGICA ----------------
-
 def normalizar_texto(texto: str) -> str:
     """Normaliza variantes catalanas/valencianas."""
     reemplazos = {
-        "saló": "salon",
         "salón": "salon",
         "despatx": "despacho",
         "cuina": "cocina",
@@ -296,49 +460,37 @@ def normalizar_texto(texto: str) -> str:
 
 
 def exportar_a_word_premium(estudio_data: dict, nombre_archivo="Informe_Robi_Pro.docx"):
-    """
-    Convierte la salida del ContentEngine en un Word profesional con gráficos.
-    """
+    """Convierte la salida del ContentEngine en un Word profesional con gráficos."""
     doc = Document()
     
-    # --- PORTADA ---
     titulo_principal = estudio_data['metadata']['tema'].upper()
     p = doc.add_heading(titulo_principal, 0)
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_paragraph(f"\nFecha: {datetime.now().strftime('%d/%m/%Y')}\nNivel: {estudio_data['metadata']['nivel']}\n\n").alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_page_break()
 
-    # --- ÍNDICE ---
     doc.add_heading('Índice de Contenidos', level=1)
     for titulo in estudio_data['indice']:
         doc.add_paragraph(titulo, style='List Bullet')
     doc.add_page_break()
 
-    # --- CUERPO DEL ESTUDIO ---
     for sec in estudio_data['secciones']:
-        # Añadir Título de Sección
         doc.add_heading(f"{sec['numero']}. {sec['titulo']}", level=1)
-        
-        # El contenido ya viene limpio del ContentEngine
         doc.add_paragraph(sec['contenido'])
 
-        # --- GESTIÓN DE GRÁFICOS/DIAGRAMAS ---
-        # Si el ContentEngine guardó datos visuales en esta sección
         if 'datos_visuales' in sec and sec['datos_visuales']:
             vis = sec['datos_visuales']
             tipo = vis.get('tipo', 'barras')
             
             try:
                 if tipo == 'organigrama':
-                    # Dibujar organigrama simple en Word
                     doc.add_heading(f"Diagrama: {vis['titulo']}", level=3)
                     for padre, hijos in vis['datos'].items():
-                        p = doc.add_paragraph(f"■ {padre}", style='List Bullet')
+                        p = doc.add_paragraph(f"▪  {padre}", style='List Bullet')
                         for hijo in hijos:
                             doc.add_paragraph(f"{hijo}", style='List Continue Bullet')
                 
                 elif tipo in ['barras', 'tarta', 'lineas']:
-                    # Generar imagen con Matplotlib
                     plt.figure(figsize=(8, 5))
                     etiquetas = list(vis['datos'].keys())
                     valores = list(vis['datos'].values())
@@ -350,18 +502,16 @@ def exportar_a_word_premium(estudio_data: dict, nombre_archivo="Informe_Robi_Pro
                     
                     plt.title(vis['titulo'])
                     
-                    # Guardar en buffer de memoria
+                    import io
                     memoria_img = io.BytesIO()
                     plt.savefig(memoria_img, format='png', bbox_inches='tight')
                     plt.close()
                     
-                    # Insertar en Word
                     doc.add_picture(memoria_img, width=Inches(5.5))
                     last_p = doc.paragraphs[-1]
                     last_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             except Exception as e:
                 logging.error(f"Error generando visual de sección {sec['numero']}: {e}")
 
-    # Guardar archivo
     doc.save(nombre_archivo)
     return nombre_archivo

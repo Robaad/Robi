@@ -31,7 +31,7 @@ def analizar_inversiones():
         try:
             hora_actual = df.iloc[0,20]
             hora_actual = str(hora_actual).split('.')[0]
-
+            
             # DÓLAR (X2, Y2) -> Pandas Fila 0, Col 23, 24
             val_dolar = df.iloc[0, 23]
             pct_dolar = df.iloc[0, 24] * 100
