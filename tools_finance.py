@@ -75,6 +75,7 @@ def analizar_inversiones():
             pct_dia = fila.iloc[16] * 100  # Columna Q
             ganancia_tot = fila.iloc[14]   # Columna O
             pct_tot = fila.iloc[15] * 100  # Columna P
+            take_profit = fila.iloc[17]    # Columna R
             
             # Sumar al total (manejando posibles nulos)
             if pd.notna(ganancia_tot):
@@ -86,7 +87,10 @@ def analizar_inversiones():
             
             reporte += f"{icono} **{nombre}**\n"
             reporte += f"   Hoy: {valor_dia:.2f}€ {tendencia} ({pct_dia:+.2f}%)\n"
-            reporte += f"   Total: {ganancia_tot:.2f}€ ({pct_tot:+.2f}%)\n\n"
+            reporte += f"   Total: {ganancia_tot:.2f}€ ({pct_tot:+.2f}%)\n"
+            reporte += f"   Take Profit: {take_profit:.2f}€"
+            reporte += "🟢" if (valor_dia-take_profit) >= 0 else "🔴"
+            reporte += "\n\n"
         
         # --- BLOQUE CIERRE (Sumatorio Total) ---
         icono_total = "✅" if total_ganancia_acumulada >= 0 else "🚨"
