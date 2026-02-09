@@ -196,8 +196,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, client
     # Revisar si está esperando input para Deep Research
     if user_id in esperando_empresa_deep and esperando_empresa_deep[user_id]:
         esperando_empresa_deep[user_id] = False
-        await update.message.reply_text(f"🚀 Investigando {user_text}...")
-        context.application.create_task(ejecutar_y_enviar_research(update, user_text, client, config))
+        await update.message.reply_text(
+            f"🚀 Evaluando {user_text.upper()} con análisis profesional...\n\n"
+            "Esto llevará unos minutos. Te aviso cuando termine."
+        )
+        context.application.create_task(ejecutar_evaluacion_valor(update, user_text, client, config))
         return
     
     # Revisar si está esperando mercado para oportunidades
@@ -1238,15 +1241,35 @@ async def ejecutar_evaluacion_valor(update, valor, client, config):
 
 
 async def lanzar_escaner_oportunidades(update, mercado, client, config):
-    """Ejecuta búsqueda de oportunidades de inversión."""
+    """Ejecuta búsqueda de oportunidades de inversión con análisis profesional."""
     try:
-        await update.message.reply_text(f"🔍 Escaneando {mercado.upper()}...")
-        resultado = await buscar_oportunidades_inversion(
-            mercado,
-            client,
-            lambda q: buscar_internet(q, client, config, MODELO_GENERACION)
+        await update.message.reply_text(
+            f"🔍 Escaneando {mercado.upper()} con análisis multi-capa...\n\n"
+            "Esto llevará varios minutos mientras evalúo cada candidato. Te aviso cuando termine."
         )
+        
+        # Crear evaluador profesional
+        from tools_system import buscar_internet
+        from evaluador_profesional import EvaluadorProfesionalCartera
+        
+        evaluador = EvaluadorProfesionalCartera(
+            client=client,
+            buscar_internet=lambda q: buscar_internet(q, client, config, MODELO_GENERACION),
+            modelo=MODELO_GENERACION
+        )
+        
+        # Ejecutar búsqueda con evaluador
+        resultado = await buscar_oportunidades_inversion(
+            mercado=mercado,
+            client=client,
+            buscar_internet=lambda q: buscar_internet(q, client, config, MODELO_GENERACION),
+            evaluador=evaluador  # <- NUEVO: Pasa el evaluador para análisis completo
+        )
+        
         await enviar_mensaje_largo(update, resultado)
+        
     except Exception as e:
         logging.error(f"Error en oportunidades: {e}")
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        await update.message.reply_text(f"❌ Error al escanear oportunidades: {str(e)}")

@@ -105,102 +105,165 @@ def analizar_inversiones():
         logging.error(f"Error al leer el Excel: {e}")
         return f"❌ Error: {str(e)}"
 
-#--- deep rresearch
-async def realizar_deep_research(nombre_valor: str, client, buscar_internet):
-    """Investigación multietapa: Técnica, Fundamental y Sentimiento."""
+
+# =============================================================================
+# NUEVA FUNCIÓN: buscar_oportunidades_inversion con evaluador profesional
+# =============================================================================
+
+async def buscar_oportunidades_inversion(mercado: str, client, buscar_internet, evaluador=None):
+    """
+    Busca acciones con alto potencial de crecimiento en Nasdaq o Ibex.
+    
+    Nueva versión: Usa el evaluador profesional para análisis profundo de cada candidato.
+    
+    Args:
+        mercado: "nasdaq" o "ibex"
+        client: Cliente de Mistral
+        buscar_internet: Función para buscar en internet
+        evaluador: Instancia de EvaluadorProfesionalCartera (opcional)
+    
+    Returns:
+        str: Informe formateado con las oportunidades encontradas
+    """
     try:
-        logging.info(f"🚀 Iniciando Deep Research para: {nombre_valor}")
-                
-        # --- OBTENER FECHA ACTUAL ---
-        hoy = datetime.now()
-        fecha_str = hoy.strftime("%d de %B de %Y") # Ejemplo: 07 de February de 2026
-
-        # FASE 1: Búsqueda diversificada
-        queries = [
-            f"precio accion {nombre_valor} tiempo real hoy {fecha_str}",
-            f"análisis fundamental {nombre_valor} 2026 resultados ingresos deuda",
-            f"precio objetivo consenso analistas bancos {nombre_valor} febrero 2026",
-            f"riesgos geopolíticos y de mercado para {nombre_valor} hoy",
-            f"análisis técnico niveles soporte y resistencia {nombre_valor}"
-        ]
+        logging.info(f"🔍 Escaneando {mercado.upper()} con análisis profesional...")
         
-        contexto_acumulado = ""
-        for q in queries:
-            res = await asyncio.to_thread(buscar_internet, q)
-            contexto_acumulado += f"\n--- INFO DE: {q} ---\n{res}\n"
-
-        # FASE 2: Super Prompt de Análisis
-        prompt_pro = f"""
-        Actúa como un Analista Senior de Equity Research. 
-        VALOR A ANALIZAR: {nombre_valor}
-        FECHA DEL INFORME: {fecha_str}
-        REGLA OBLIGATORIA: DEBES obtener primero el precio real de HOY usando BUSCAR, ejemplo: 'precio accion META hoy' antes de generar el comando DEEP_RESEARCH."
-        
-        DATOS RECOPILADOS:
-        {contexto_acumulado}
-        
-        ESTRUCTURA DEL INFORME:
-        1. 📊 **TESIS DE INVERSIÓN**: Resumen ejecutivo de la situación actual.
-        2. 📈 **FUNDAMENTALES**: Salud financiera, PER, deuda y crecimiento esperado.
-        3. 📉 **RIESGOS (BEAR CASE)**: Qué podría hacer que el valor caiga un 20% (sé muy crítico).
-        4. 🎯 **VALORACIÓN Y PRECIO OBJETIVO**: Consenso de mercado vs precio actual.
-        5. 💡 **ESTRATEGIA RECOMENDADA**: (Comprar/Vender/Mantener), precio de entrada ideal y horizonte temporal.
-
-        Usa un tono profesional, cínico con las burbujas y muy analítico. No des consejos genéricos.
-        """
-
-        # Usamos Mistral Large con temperatura baja para máxima precisión
-        response = await asyncio.to_thread(
-            client.chat.complete,
-            model=MODELO_LISTO,
-            messages=[{"role": "user", "content": prompt_pro}],
-            temperature=0.1
-        )
-        return response.choices[0].message.content
-
-    except Exception as e:
-        logging.error(f"Error en Deep Research: {e}")
-        return f"❌ Falló el análisis profundo de {nombre_valor}. Error: {str(e)}"
-
-async def buscar_oportunidades_inversion(mercado: str, client, buscar_internet):
-    """Busca acciones con alto potencial de crecimiento en Nasdaq o Ibex."""
-    try:
-        # Definimos la búsqueda según el mercado
+        # FASE 1: Búsqueda inicial de candidatos
         if "nasdaq" in mercado.lower():
-            query = "best growth stocks nasdaq 2026 high upside analyst ratings"
+            query = "best growth stocks nasdaq 2026 high upside analyst ratings top picks"
         else:
-            query = "mejores acciones ibex 35 con potencial crecimiento 2026 dividendos y analistas"
+            query = "mejores acciones ibex 35 con potencial crecimiento 2026 dividendos consenso analistas"
 
-        # 1. Buscamos en la web
         contexto = await asyncio.to_thread(buscar_internet, query)
 
-        # 2. Le pedimos a Mistral Large que actúe como un Stock Picker
-        prompt = f"""
-        Eres un experto en Stock Picking. Basándote en esta información:
+        # FASE 2: Extraer candidatos con Mistral
+        prompt_candidatos = f"""
+        Basándote en esta información:
         {contexto}
         
         TAREA:
-        Selecciona las 3 mejores oportunidades de inversión en {mercado.upper()}.
-        Para cada una indica:
-        - Ticker y Nombre.
-        - Tesis de crecimiento (¿Por qué va a subir?).
-        - Precio objetivo medio.
-        - Nivel de riesgo (Bajo, Medio, Alto).
+        Identifica EXACTAMENTE 3 tickers/empresas con mayor potencial en {mercado.upper()}.
         
-        ⚠️ Sé muy selectivo. Si no hay datos claros, adviértelo.
+        Responde SOLO con formato JSON:
+        {{
+            "candidatos": [
+                {{"ticker": "AAPL", "nombre": "Apple Inc"}},
+                {{"ticker": "MSFT", "nombre": "Microsoft Corp"}},
+                {{"ticker": "NVDA", "nombre": "NVIDIA Corp"}}
+            ]
+        }}
+        
+        REGLAS:
+        - Solo tickers reales y actuales
+        - Solo 3 candidatos
+        - Sin explicaciones adicionales
         """
 
         res = await asyncio.to_thread(
             client.chat.complete,
             model=MODELO_LISTO,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
+            messages=[{"role": "user", "content": prompt_candidatos}],
+            temperature=0.2
         )
-        return res.choices[0].message.content
+        
+        # Parsear respuesta
+        import json
+        try:
+            respuesta_json = res.choices[0].message.content
+            # Limpiar posibles markdown
+            respuesta_json = respuesta_json.replace('```json', '').replace('```', '').strip()
+            candidatos_data = json.loads(respuesta_json)
+            candidatos = candidatos_data.get('candidatos', [])
+        except Exception as e:
+            logging.error(f"Error parseando candidatos: {e}")
+            return f"❌ No pude identificar candidatos válidos en {mercado}"
+
+        if not candidatos or len(candidatos) == 0:
+            return f"❌ No se encontraron candidatos válidos en {mercado}"
+
+        # FASE 3: Evaluar cada candidato con el evaluador profesional
+        if evaluador is None:
+            return _formato_simple_oportunidades(candidatos, mercado)
+        
+        evaluaciones = []
+        for candidato in candidatos[:3]:  # Max 3
+            ticker = candidato.get('ticker', '')
+            nombre = candidato.get('nombre', ticker)
+            
+            logging.info(f"  📊 Evaluando {ticker}...")
+            
+            try:
+                evaluacion = await evaluador.evaluar_valor_unico(f"{ticker} {nombre}")
+                if evaluacion.get('success'):
+                    evaluaciones.append(evaluacion['evaluaciones'][0])
+                else:
+                    logging.warning(f"  ⚠️ No se pudo evaluar {ticker}")
+            except Exception as e:
+                logging.error(f"  ❌ Error evaluando {ticker}: {e}")
+                continue
+
+        # FASE 4: Formatear resultados
+        if not evaluaciones:
+            return _formato_simple_oportunidades(candidatos, mercado)
+        
+        return _formatear_oportunidades_profesional(evaluaciones, mercado)
 
     except Exception as e:
-        logging.error(f"Error en escáner: {e}")
+        logging.error(f"Error en escáner de oportunidades: {e}")
+        import traceback
+        traceback.print_exc()
         return f"❌ No pude escanear el mercado {mercado} en este momento."
+
+
+def _formato_simple_oportunidades(candidatos, mercado):
+    """Formato simple cuando no hay evaluador disponible."""
+    msg = f"🔍 **OPORTUNIDADES EN {mercado.upper()}**\n\n"
+    msg += "Candidatos identificados (requieren análisis adicional):\n\n"
+    for i, c in enumerate(candidatos[:3], 1):
+        msg += f"{i}. **{c.get('ticker')}** - {c.get('nombre')}\n"
+    msg += "\n💡 Usa /deep [TICKER] para análisis detallado de cada candidato."
+    return msg
+
+
+def _formatear_oportunidades_profesional(evaluaciones, mercado):
+    """Formatea resultados con análisis profesional."""
+    from evaluador_profesional import formatear_evaluacion_individual_profesional
+    
+    msg = f"🎯 **OPORTUNIDADES DE INVERSIÓN - {mercado.upper()}**\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"**Análisis Profesional de Top 3 Candidatos**\n"
+    msg += f"Metodología: Análisis Multi-Capa (Técnico + Fundamental + Consenso)\n\n"
+    
+    # Ordenar por upside potencial (mayor primero)
+    evaluaciones_ordenadas = sorted(
+        evaluaciones,
+        key=lambda x: float(x['recomendacion'].get('upside_potencial', 0)),
+        reverse=True
+    )
+    
+    for i, ev in enumerate(evaluaciones_ordenadas, 1):
+        msg += f"**#{i} OPORTUNIDAD**\n"
+        msg += formatear_evaluacion_individual_profesional(ev)
+        msg += "\n"
+    
+    # Resumen comparativo
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "**COMPARATIVA RÁPIDA:**\n\n"
+    
+    for ev in evaluaciones_ordenadas:
+        nombre = ev.get('nombre', 'N/A')
+        accion = ev['recomendacion'].get('accion', 'N/A')
+        upside = ev['recomendacion'].get('upside_potencial', 0)
+        riesgo = ev['recomendacion'].get('riesgo', 'N/A')
+        
+        icono = '🟢' if accion in ['COMPRAR', 'AUMENTAR'] else '🟡' if accion == 'MANTENER' else '🔴'
+        
+        msg += f"{icono} **{nombre}**: {accion} | Upside: {upside:+.1f}% | Riesgo: {riesgo}\n"
+    
+    msg += "\n⚠️ Estos análisis son orientativos. Valida antes de invertir.\n"
+    
+    return msg
+
 
 #--ASESON FINANCIERO--
 def super_asesor_financiero(nombre_valor: str, client, buscar_internet):
