@@ -1017,7 +1017,7 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
         from generador_graficos import IntegradorGraficosWord
         
         integrador = IntegradorGraficosWord(client, modelo=MODELO_GENERACION)
-        total_graficos = 0
+        total_visuales = 0
         
         # Procesar cada sección con el integrador de gráficos
         for seccion in secciones_desarrolladas:
@@ -1027,19 +1027,19 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
                     text=f"🔍 Analizando datos en: {seccion['titulo'][:40]}..."
                 )
                 
-                num_graficos = await integrador.procesar_seccion_con_graficos(
+                resultado = await integrador.procesar_seccion_con_graficos(
                     titulo_seccion=seccion['titulo'],
                     contenido=seccion['contenido'],
                     doc=doc,
                     numero_seccion=seccion['numero']
                 )
                 
-                total_graficos += num_graficos
+                total_visuales += resultado["total"]
                 
-                if num_graficos > 0:
+                if resultado["total"] > 0:
                     await context.bot.send_message(
                         chat_id=chat_id,
-                        text=f"✅ {num_graficos} gráfico(s) añadido(s) en sección {seccion['numero']}"
+                        text=f"✅ {resultado['total']} recurso(s) visual(es) añadido(s) en sección {seccion['numero']}"
                     )
             
             except Exception as e:
@@ -1048,10 +1048,10 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
                 continue
         
         # Si no se añadieron gráficos automáticamente, añadir las secciones como texto
-        if total_graficos == 0:
+        if total_visuales == 0:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="ℹ️ No se detectaron datos visualizables. Generando documento solo con texto."
+                text="ℹ️ No se detectaron datos o modelos visualizables. Generando documento solo con texto."
             )
             
             # Recorrer secciones y añadir al documento
@@ -1074,8 +1074,8 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
         mensaje_final += f"📊 Secciones: {len(secciones_desarrolladas)}\n"
         mensaje_final += f"📏 Extensión: ~{total_palabras:,} palabras\n"
         
-        if total_graficos > 0:
-            mensaje_final += f"📈 Gráficos generados: {total_graficos}\n"
+        if total_visuales > 0:
+            mensaje_final += f"📈 Recursos visuales generados: {total_visuales}\n"
         
         mensaje_final += f"\nEl documento está listo en tu carpeta de Documentos."
         
