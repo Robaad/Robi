@@ -7,6 +7,7 @@ para generar recomendaciones de inversión institucionales.
 
 import pandas as pd
 import logging
+import asyncio
 from datetime import datetime
 from typing import Dict, List
 from motor_cuantitativo import (
@@ -41,7 +42,7 @@ class EvaluadorProfesionalCartera:
             logging.info("📊 Iniciando evaluación profesional de cartera...")
             
             # Leer Excel
-            df = pd.read_excel(ruta_excel, sheet_name='Operaciones')
+            df = await asyncio.to_thread(pd.read_excel, ruta_excel, sheet_name='Operaciones')
             activas = df[df.iloc[:, 8].isna()].copy()
             
             if activas.empty:
@@ -327,7 +328,8 @@ Sé riguroso y profesional. Esta recomendación afecta dinero real.
 """
         
         try:
-            response = self.client.chat.complete(
+            response = await asyncio.to_thread(
+                self.client.chat.complete,
                 model=self.modelo,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.15,  # Baja temperatura para decisiones conservadoras

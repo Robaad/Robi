@@ -12,6 +12,7 @@ Sistema profesional de análisis de valores que combina:
 
 import numpy as np
 import logging
+import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 import re
@@ -397,7 +398,7 @@ class BuscadorDatosWeb:
         query = f"{ticker} historical prices last 12 months data {fecha_hoy}"
         
         try:
-            resultado = self.buscar(query)
+            resultado = await asyncio.to_thread(self.buscar, query)
             
             # Usar IA para extraer precios
             prompt = f"""Extrae una serie de precios históricos de esta información sobre {ticker}.
@@ -411,7 +412,8 @@ Ejemplo: 45.2, 46.1, 44.8, 47.3, 48.1, 49.5
 Si no encuentras precios históricos, responde: NO_DISPONIBLE
 """
             
-            response = self.client.chat.complete(
+            response = await asyncio.to_thread(
+                self.client.chat.complete,
                 model=self.modelo,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1
@@ -450,7 +452,7 @@ Si no encuentras precios históricos, responde: NO_DISPONIBLE
         contexto = ""
         for categoria, query in queries.items():
             try:
-                resultado = self.buscar(query)
+                resultado = await asyncio.to_thread(self.buscar, query)
                 contexto += f"\n=== {categoria.upper()} ===\n{resultado}\n"
             except Exception as e:
                 logging.error(f"Error en búsqueda {categoria}: {e}")
@@ -480,7 +482,8 @@ Sé conservador. Si no estás seguro, usa null.
 """
         
         try:
-            response = self.client.chat.complete(
+            response = await asyncio.to_thread(
+                self.client.chat.complete,
                 model=self.modelo,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
@@ -510,7 +513,7 @@ Sé conservador. Si no estás seguro, usa null.
         contexto = ""
         for query in queries:
             try:
-                resultado = self.buscar(query)
+                resultado = await asyncio.to_thread(self.buscar, query)
                 contexto += f"\n{resultado}\n"
             except:
                 continue
@@ -537,7 +540,8 @@ Si no hay datos, usa null.
 """
         
         try:
-            response = self.client.chat.complete(
+            response = await asyncio.to_thread(
+                self.client.chat.complete,
                 model=self.modelo,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
@@ -559,7 +563,7 @@ Si no hay datos, usa null.
         query = f"{ticker} {nombre} news última semana important developments"
         
         try:
-            noticias = self.buscar(query)
+            noticias = await asyncio.to_thread(self.buscar, query)
             
             prompt = f"""Analiza el sentimiento de estas noticias recientes sobre {ticker}.
 
@@ -576,7 +580,8 @@ Responde en JSON:
 }}
 """
             
-            response = self.client.chat.complete(
+            response = await asyncio.to_thread(
+                self.client.chat.complete,
                 model=self.modelo,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
