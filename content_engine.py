@@ -18,9 +18,17 @@ import json
 class ContentEngine:
     """Motor de generación de contenido con templates especializados."""
     
-    def __init__(self, client, modelo_avanzado="mistral-large-latest"):
+    def __init__(
+        self,
+        client,
+        modelo_avanzado="mistral-large-latest",
+        perfil_redactor="académico",
+        tono="formal",
+    ):
         self.client = client
         self.modelo = modelo_avanzado
+        self.perfil_redactor = perfil_redactor
+        self.tono = tono
         
     # async def generar_estudio_academico(
     #     self, 
@@ -249,7 +257,7 @@ class ContentEngine:
             for sec in ultimas_secciones:
                 resumen_previo += f"\n{sec['titulo']}: {sec['contenido'][:200]}...\n"
         
-        prompt = f"""Eres un experto redactor académico. 
+        prompt = f"""Eres un experto redactor {self.perfil_redactor}.
 
 TAREA: Desarrollar la sección {numero} de {total} de un estudio sobre "{tema_global}"
 
@@ -273,7 +281,7 @@ REQUISITOS:
 3. Datos concretos, no generalidades
 4. Coherencia con lo ya escrito
 5. Citas y referencias obligatorias
-6. Lenguaje formal pero comprensible
+6. Lenguaje {self.tono} pero comprensible
 
 IMPORTANTE:
 - NO repitas información de secciones anteriores
