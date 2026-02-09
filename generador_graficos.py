@@ -10,6 +10,7 @@ import logging
 import asyncio
 import matplotlib.pyplot as plt
 import matplotlib
+from matplotlib import patches
 matplotlib.use('Agg')  # Backend sin GUI para servidores
 from io import BytesIO
 from typing import Dict, List, Optional, Tuple
@@ -116,6 +117,85 @@ Responde SOLO el JSON, sin explicaciones.
             return None
 
 
+class ExtractorVisuales:
+    """Detecta oportunidades para ilustraciones y diagramas a partir de texto."""
+
+    def __init__(self, client, modelo="mistral-large-latest"):
+        self.client = client
+        self.modelo = modelo
+
+    async def detectar_visual(self, contenido: str, titulo_seccion: str) -> Optional[Dict]:
+        """
+        Detecta si un texto se presta a un diagrama o ilustración conceptual.
+
+        Returns:
+            Dict con especificación visual si aplica; None si no aplica.
+        """
+        indicadores_visual = [
+            'proceso', 'flujo', 'etapas', 'fases', 'pipeline', 'metodología',
+            'arquitectura', 'componentes', 'modelo', 'framework', 'relación',
+            'mapa', 'conceptual', 'ciclo', 'sistema'
+        ]
+
+        tiene_indicios = any(
+            palabra in contenido.lower() for palabra in indicadores_visual
+        )
+
+        if not tiene_indicios:
+            return None
+
+        prompt = f"""Analiza este texto de la sección "{titulo_seccion}" y propone un modelo visual útil.
+
+TEXTO:
+{contenido[:1500]}
+
+REGLAS:
+1. Si hay pasos, fases o secuencia, usa tipo "diagrama_flujo" con lista ordenada.
+2. Si hay conceptos y relaciones, usa tipo "mapa_conceptual" con nodo central y nodos relacionados.
+3. Responde SOLO en formato JSON.
+4. Si NO hay material visualizable, responde: {{"tiene_visual": false}}
+
+Formato si hay visual:
+{{
+  "tiene_visual": true,
+  "tipo_visual": "diagrama_flujo|mapa_conceptual",
+  "titulo": "Título descriptivo",
+  "elementos": ["Paso 1", "Paso 2", "Paso 3"],
+  "nodo_central": "Concepto central",
+  "nodos_relacionados": ["Nodo 1", "Nodo 2", "Nodo 3"]
+}}
+
+Responde SOLO el JSON, sin explicaciones.
+"""
+
+        try:
+            response = await asyncio.to_thread(
+                self.client.chat.complete,
+                model=self.modelo,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                response_format={"type": "json_object"}
+            )
+
+            import json
+            resultado = json.loads(response.choices[0].message.content)
+
+            if not resultado.get('tiene_visual', False):
+                return None
+
+            return {
+                'tipo': resultado.get('tipo_visual'),
+                'titulo': resultado.get('titulo', 'Modelo visual'),
+                'elementos': resultado.get('elementos', []),
+                'nodo_central': resultado.get('nodo_central', ''),
+                'nodos_relacionados': resultado.get('nodos_relacionados', [])
+            }
+
+        except Exception as e:
+            logging.error(f"Error extrayendo visuales: {e}")
+            return None
+
+
 class GeneradorGraficos:
     """Genera gráficos profesionales con matplotlib."""
     
@@ -213,12 +293,114 @@ class GeneradorGraficos:
         return buffer
 
 
+class GeneradorVisuales:
+    """Genera diagramas e ilustraciones conceptuales con matplotlib."""
+
+    @staticmethod
+    def _render_diagrama_flujo(titulo: str, elementos: List[str]) -> BytesIO:
+        fig, ax = plt.subplots(figsize=(8, max(4, len(elementos) * 1.2)))
+        ax.axis('off')
+
+        box_width = 0.7
+        box_height = 0.12
+        start_y = 0.9
+        step = 0.18
+
+        for idx, texto in enumerate(elementos[:6]):
+            y = start_y - idx * step
+            rect = patches.FancyBboxPatch(
+                (0.15, y - box_height / 2),
+                box_width,
+                box_height,
+                boxstyle="round,pad=0.02,rounding_size=0.02",
+                linewidth=1.5,
+                edgecolor='#2E86C1',
+                facecolor='#EAF2F8'
+            )
+            ax.add_patch(rect)
+            ax.text(0.5, y, texto, ha='center', va='center', fontsize=10, wrap=True)
+
+            if idx < min(len(elementos), 6) - 1:
+                ax.annotate(
+                    '',
+                    xy=(0.5, y - box_height / 2 - 0.02),
+                    xytext=(0.5, y - step + box_height / 2 + 0.02),
+                    arrowprops=dict(arrowstyle='->', color='#566573', lw=1.5)
+                )
+
+        ax.set_title(titulo, fontsize=13, fontweight='bold', pad=12)
+
+        buffer = BytesIO()
+        plt.tight_layout()
+        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        buffer.seek(0)
+        return buffer
+
+    @staticmethod
+    def _render_mapa_conceptual(titulo: str, nodo_central: str, nodos: List[str]) -> BytesIO:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.axis('off')
+
+        centro = (0.5, 0.5)
+        ax.add_patch(patches.Circle(centro, 0.12, color='#D6EAF8', ec='#2E86C1', lw=2))
+        ax.text(centro[0], centro[1], nodo_central or 'Concepto', ha='center', va='center', fontsize=11)
+
+        radio = 0.32
+        nodos = nodos[:6]
+        total = max(len(nodos), 1)
+        for i, nodo in enumerate(nodos):
+            angulo = 2 * np.pi * i / total
+            x = centro[0] + radio * np.cos(angulo)
+            y = centro[1] + radio * np.sin(angulo)
+            ax.plot([centro[0], x], [centro[1], y], color='#7F8C8D', lw=1.2)
+            ax.add_patch(patches.FancyBboxPatch(
+                (x - 0.18, y - 0.05),
+                0.36,
+                0.1,
+                boxstyle="round,pad=0.02,rounding_size=0.02",
+                linewidth=1,
+                edgecolor='#27AE60',
+                facecolor='#E8F8F5'
+            ))
+            ax.text(x, y, nodo, ha='center', va='center', fontsize=9, wrap=True)
+
+        ax.set_title(titulo, fontsize=13, fontweight='bold', pad=12)
+
+        buffer = BytesIO()
+        plt.tight_layout()
+        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        buffer.seek(0)
+        return buffer
+
+    def generar_visual(self, visual_spec: Dict) -> BytesIO:
+        tipo = visual_spec.get('tipo')
+        titulo = visual_spec.get('titulo', 'Modelo visual')
+
+        if tipo == 'diagrama_flujo':
+            elementos = visual_spec.get('elementos', [])
+            if not elementos:
+                elementos = ['Paso 1', 'Paso 2', 'Paso 3']
+            return self._render_diagrama_flujo(titulo, elementos)
+
+        if tipo == 'mapa_conceptual':
+            nodo_central = visual_spec.get('nodo_central', 'Concepto')
+            nodos = visual_spec.get('nodos_relacionados', [])
+            return self._render_mapa_conceptual(titulo, nodo_central, nodos)
+
+        elementos = visual_spec.get('elementos', ['Idea 1', 'Idea 2', 'Idea 3'])
+        return self._render_diagrama_flujo(titulo, elementos)
+
+
 class IntegradorGraficosWord:
     """Integra gráficos en documentos Word."""
     
     def __init__(self, client, modelo="mistral-large-latest"):
         self.extractor = ExtractorDatos(client, modelo)
         self.generador = GeneradorGraficos()
+        self.extractor_visual = ExtractorVisuales(client, modelo)
+        self.generador_visual = GeneradorVisuales()
     
     async def procesar_seccion_con_graficos(
         self, 
@@ -226,7 +408,7 @@ class IntegradorGraficosWord:
         contenido: str, 
         doc,
         numero_seccion: int
-    ) -> int:
+    ) -> Dict[str, int]:
         """
         Procesa una sección, detecta datos, genera gráficos y los añade al doc.
         
@@ -237,11 +419,12 @@ class IntegradorGraficosWord:
             numero_seccion: Número de la sección
         
         Returns:
-            Número de gráficos añadidos
+            Dict con conteos de recursos visuales añadidos
         """
-        from docx.shared import Inches
+        from docx.shared import Inches, Pt
         
         graficos_añadidos = 0
+        visuales_añadidos = 0
         
         # Añadir título de sección
         doc.add_heading(titulo_seccion, level=1)
@@ -296,8 +479,47 @@ class IntegradorGraficosWord:
                 except Exception as e:
                     logging.error(f"Error generando gráfico en sección {numero_seccion}: {e}")
                     continue
+
+            if i > 0 and i % 3 == 0 and visuales_añadidos < 1:
+                try:
+                    contexto = '\n'.join(parrafos[:i+1])
+                    visual_spec = await self.extractor_visual.detectar_visual(
+                        contexto,
+                        titulo_seccion
+                    )
+
+                    if visual_spec:
+                        logging.info(f"✅ Visual encontrado en '{titulo_seccion}': {visual_spec['tipo']}")
+                        imagen_buffer = self.generador_visual.generar_visual(visual_spec)
+
+                        doc.add_paragraph()
+                        doc.add_picture(imagen_buffer, width=Inches(5.8))
+
+                        last_paragraph = doc.paragraphs[-1]
+                        last_paragraph.alignment = 1
+
+                        caption = doc.add_paragraph(
+                            f"Figura {numero_seccion}.{graficos_añadidos + visuales_añadidos + 1}: {visual_spec['titulo']}"
+                        )
+                        caption.alignment = 1
+                        caption.runs[0].italic = True
+                        caption.runs[0].font.size = Pt(10)
+
+                        doc.add_paragraph()
+                        visuales_añadidos += 1
+
+                        logging.info(
+                            f"✅ Visual {visuales_añadidos} añadido a sección {numero_seccion}"
+                        )
+                except Exception as e:
+                    logging.error(f"Error generando visual en sección {numero_seccion}: {e}")
+                    continue
         
-        return graficos_añadidos
+        return {
+            "graficos": graficos_añadidos,
+            "visuales": visuales_añadidos,
+            "total": graficos_añadidos + visuales_añadidos
+        }
 
 
 # Función auxiliar para usar desde brain_v2.py
@@ -334,19 +556,19 @@ async def añadir_graficos_inteligentes(
                     text=f"🔍 Buscando datos visualizables en: {seccion['titulo'][:50]}..."
                 )
             
-            num_graficos = await integrador.procesar_seccion_con_graficos(
+            resultado = await integrador.procesar_seccion_con_graficos(
                 titulo_seccion=seccion['titulo'],
                 contenido=seccion['contenido'],
                 doc=doc,
                 numero_seccion=seccion['numero']
             )
             
-            total_graficos += num_graficos
+            total_graficos += resultado["total"]
             
-            if num_graficos > 0 and context and chat_id:
+            if resultado["total"] > 0 and context and chat_id:
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=f"✅ {num_graficos} gráfico(s) añadido(s) a la sección {seccion['numero']}"
+                    text=f"✅ {resultado['total']} recurso(s) visual(es) añadido(s) a la sección {seccion['numero']}"
                 )
         
         except Exception as e:
