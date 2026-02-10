@@ -131,7 +131,7 @@ async def control_toldos_sonoff(accion, config):
     try:
         # Importar la librería
         import asyncio
-        from ewelink import EWeLink as eWeLink
+        from pyewelink import eWeLink
         
         # Extraer credenciales del config
         email = config["sonoff"]["email"]

@@ -9,6 +9,7 @@ services:
       - .:/app # Código y config
       - whisper-cache:/app/whisper_models # 🔹 Persiste modelo Whisper
       - "C:/Users/Robert/OneDrive/Documentos:/app/documentos"
+      - bot_ssh:/root/.ssh
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Europe/Madrid # 🔹 Zona horaria para logs y calendar
@@ -26,3 +27,4 @@ services:
 
 volumes:
   whisper-cache: # 🔹 Evita redescargar el modelo en cada rebuild
+  bot_ssh:

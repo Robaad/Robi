@@ -146,7 +146,21 @@ Ejemplo: BUSCAR: 'noticias tecnología IA'
 Formato: ACCION: 'dispositivo', 'ON'/'OFF'
 Dispositivos: salon, despacho, cocina, comedor, dormitorio, caterina, ovidi, 
              ventilador despacho, ventilador caterina, ventilador ovidi, ventilador dormitori
-Formato toldos: ACCION: 'toldo', 'SUBIR'/'BAJAR'/'PARAR'
+
+ CONTROL DE TOLDOS (especial):
+Formato: ACCION: 'toldo', 'SUBIR'/'BAJAR'/'PARAR'
+
+REGLAS DE NORMALIZACIÓN CRÍTICAS:
+1. SIEMPRE usa "toldo" (singular), nunca "toldos"
+2. Ignora artículos: "el toldo", "los toldos" → "toldo"
+3. Ejemplos correctos:
+   - Usuario: "baja el toldo" → ACCION: 'toldo', 'BAJAR'
+   - Usuario: "baja los toldos" → ACCION: 'toldo', 'BAJAR'
+   - Usuario: "sube toldos" → ACCION: 'toldo', 'SUBIR'
+   - Usuario: "para toldo" → ACCION: 'toldo', 'PARAR'
+
+NUNCA generes: ACCION: 'toldos', ... (MAL)
+SIEMPRE genera: ACCION: 'toldo', ... (BIEN)
 
 3️⃣ CALENDARIO
 Formato: CALENDAR_CREAR: 'título', 'YYYY-MM-DD', 'HH:MM'
@@ -547,13 +561,13 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
 async def configurar_comandos(app):
     """Configura el menú de comandos de Telegram."""
     comandos = [
-        ("start", "Reiniciar Robi"),
         ("inversiones", "Ver balance de cartera"),
-        ("evaluar", "Evaluar cartera y obtener recomendaciones"),  # ← NUEVO
+        ("evaluar", "Evaluar cartera y obtener recomendaciones"),
         ("oportunidades", "Buscar oportunidades de inversión"),
-        ("ip", "Consultar IP pública"),
         ("deep", "Análisis profundo de valor"),
-        ("studio", "Generar informe/estudio")
+        ("ip", "Consultar IP pública"),
+        ("studio", "Generar informe/estudio"),
+        ("start", "Reiniciar Robi")
     ]
     await app.bot.set_my_commands(comandos)
 
