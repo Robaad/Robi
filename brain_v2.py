@@ -13,6 +13,8 @@ import logging
 import re
 import asyncio
 import unicodedata
+import subprocess
+import sys
 from datetime import datetime, timedelta
 from docx import Document
 from telegram import Update, ReplyKeyboardMarkup
@@ -449,8 +451,44 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Limpiar historial
     if user_id in historiales:
         del historiales[user_id]
-    
-    await mostrar_menu_principal(update)
+
+    await update.message.reply_text("🔄 Actualizando Robi desde Git...")
+
+    comando_pull = ["git", "pull", "--ff-only"]
+    resultado_pull = await asyncio.to_thread(
+        subprocess.run,
+        comando_pull,
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    salida_pull = (resultado_pull.stdout or resultado_pull.stderr or "Sin salida").strip()
+    if len(salida_pull) > 1200:
+        salida_pull = f"{salida_pull[:1200]}..."
+
+    if resultado_pull.returncode != 0:
+        await update.message.reply_text(
+            "❌ No se pudo actualizar el código con git pull.\n\n"
+            f"Salida:\n{salida_pull}"
+        )
+        await mostrar_menu_principal(update)
+        return
+
+    await update.message.reply_text(
+        "✅ Código actualizado correctamente.\n"
+        "♻️ Reiniciando servidor de Robi para cargar cambios..."
+    )
+
+    context.application.create_task(_reiniciar_proceso_robicamente())
+
+
+async def _reiniciar_proceso_robicamente():
+    """Reinicia el proceso actual para cargar código actualizado."""
+    await asyncio.sleep(1)
+    os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
 async def mostrar_menu_principal(update: Update):
