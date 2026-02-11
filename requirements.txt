@@ -1,5 +1,5 @@
 python-telegram-bot==21.0
-pyewelink
+ewelink
 mistralai==1.5.0
 google-genai==0.2.0
 google-auth-oauthlib==1.2.0

@@ -112,14 +112,83 @@ GRUPOS_DOMOTICA = {
 
 
 # ============================================================================
-# SOLUCIÓN DEFINITIVA: Control de Toldos con pyewelink (SÍ está en PyPI)
+# Control de toldos con librería oficial eWeLink
 # ============================================================================
+
+async def _set_ewelink_channel_state(client, device_id, channel, state):
+    """Envía estado de canal con distintos nombres de método soportados."""
+    method_candidates = [
+        ("set_device_power_state", (device_id, channel, state), {}),
+        ("set_device_switch", (), {"device_id": device_id, "outlet": channel, "status": state}),
+        ("set_switch", (), {"device_id": device_id, "outlet": channel, "switch": state}),
+    ]
+
+    for method_name, args, kwargs in method_candidates:
+        method = getattr(client, method_name, None)
+        if method is None:
+            continue
+
+        result = method(*args, **kwargs)
+        if hasattr(result, "__await__"):
+            await result
+        return
+
+    # Último intento: API genérica update_device
+    update_method = getattr(client, "update_device", None)
+    if update_method is None:
+        raise AttributeError("La librería eWeLink no expone un método compatible para cambiar el estado")
+
+    payload = {
+        "switches": [{"switch": state, "outlet": channel}]
+    }
+    result = update_method(device_id=device_id, params=payload)
+    if hasattr(result, "__await__"):
+        await result
+
+
+def _build_ewelink_client(config):
+    """Crea cliente oficial eWeLink usando credenciales de config.yaml."""
+    sonoff_config = config.get("sonoff", {})
+    app_id = sonoff_config.get("app_id")
+    app_secret = sonoff_config.get("app_secret")
+    region = sonoff_config.get("region", "eu")
+
+    if not app_id or not app_secret:
+        raise ValueError(
+            "Faltan credenciales de Open API en config['sonoff']: app_id y app_secret"
+        )
+
+    import ewelink
+
+    # Compatibilidad con distintos nombres de clase del SDK oficial
+    for client_cls_name in ("Client", "Ewelink", "EWeLink"):
+        client_cls = getattr(ewelink, client_cls_name, None)
+        if client_cls is None:
+            continue
+
+        try:
+            return client_cls(app_id=app_id, app_secret=app_secret, region=region)
+        except TypeError:
+            return client_cls(app_id, app_secret, region=region)
+
+    raise AttributeError(
+        "No se encontró una clase cliente compatible en la librería ewelink. "
+        "Esperadas: Client, Ewelink o EWeLink"
+    )
 
 async def control_toldos_sonoff(accion, config):
     """
-    Control de toldos Sonoff usando pyewelink.
+    Control de toldos Sonoff usando la librería oficial de eWeLink.
     
-    Esta librería SÍ está disponible en PyPI y funciona con usuario/contraseña.
+    Config esperado en config.yaml:
+      sonoff:
+        app_id: "..."
+        app_secret: "..."
+        region: "eu"   # opcional
+        device_id_toldo: "1000xxxxxx"
+        access_token: "..."  # opcional (si no existe, se intentará login email/password)
+        email: "..."         # opcional
+        password: "..."      # opcional
     
     Args:
         accion: "SUBIR", "BAJAR" o "PARAR"
@@ -129,34 +198,40 @@ async def control_toldos_sonoff(accion, config):
         str: Mensaje de resultado
     """
     try:
-        # Importar la librería
         import asyncio
-        from pyewelink import eWeLink
-        
-        # Extraer credenciales del config
-        email = config["sonoff"]["email"]
-        password = config["sonoff"]["password"]
-        region = config["sonoff"].get("region", "eu")
-        device_id = config["sonoff"]["device_id_toldo"]
+        sonoff_config = config["sonoff"]
+        device_id = sonoff_config["device_id_toldo"]
+        region = sonoff_config.get("region", "eu")
         
         logging.info(f"🔌 Conectando a eWeLink ({region})...")
         
-        # Crear cliente
-        client = eWeLink(email, password, region=region)
-        
-        # Login
-        await client.login()
-        logging.info("✅ Login exitoso en eWeLink")
-        
-        # Obtener dispositivos para verificar que existe
-        devices = await client.get_devices()
-        device = next((d for d in devices if d['deviceid'] == device_id), None)
-        
-        if not device:
-            logging.error(f"❌ Device ID {device_id} no encontrado")
-            return f"❌ Dispositivo no encontrado. Device ID: {device_id}"
-        
-        logging.info(f"📱 Dispositivo encontrado: {device.get('name', 'Sin nombre')}")
+        # Crear cliente del SDK oficial
+        client = _build_ewelink_client(config)
+
+        # Autenticación por token (preferente) o email/password (fallback)
+        access_token = sonoff_config.get("access_token")
+        if access_token:
+            setter = getattr(client, "set_access_token", None)
+            if setter:
+                setter(access_token)
+            else:
+                setattr(client, "access_token", access_token)
+            logging.info("✅ Autenticado en eWeLink con access_token")
+        else:
+            email = sonoff_config.get("email")
+            password = sonoff_config.get("password")
+            login = getattr(client, "login", None)
+
+            if not login or not email or not password:
+                return (
+                    "❌ Falta access_token o credenciales email/password en config['sonoff'] "
+                    "para autenticar con eWeLink"
+                )
+
+            result = login(email=email, password=password)
+            if hasattr(result, "__await__"):
+                await result
+            logging.info("✅ Login exitoso en eWeLink con email/password")
         
         # Determinar acción
         # Asumiendo dispositivo de 2 canales:
@@ -164,26 +239,26 @@ async def control_toldos_sonoff(accion, config):
         
         if accion == "PARAR":
             # Apagar ambos canales
-            await client.set_device_power_state(device_id, 0, 'off')
-            await client.set_device_power_state(device_id, 1, 'off')
+            await _set_ewelink_channel_state(client, device_id, 0, "off")
+            await _set_ewelink_channel_state(client, device_id, 1, "off")
             logging.info("🛑 Toldo detenido")
             return "Toldo detenido. 🛑"
         
         elif accion == "SUBIR":
             # Seguridad: Apagar canal de bajar primero
-            await client.set_device_power_state(device_id, 1, 'off')
+            await _set_ewelink_channel_state(client, device_id, 1, "off")
             await asyncio.sleep(0.5)  # Pausa de seguridad
             # Activar canal de subir
-            await client.set_device_power_state(device_id, 0, 'on')
+            await _set_ewelink_channel_state(client, device_id, 0, "on")
             logging.info("⬆️ Toldo subiendo")
             return "Toldo subiendo. ⬆️"
         
         elif accion == "BAJAR":
             # Seguridad: Apagar canal de subir primero
-            await client.set_device_power_state(device_id, 0, 'off')
+            await _set_ewelink_channel_state(client, device_id, 0, "off")
             await asyncio.sleep(0.5)  # Pausa de seguridad
             # Activar canal de bajar
-            await client.set_device_power_state(device_id, 1, 'on')
+            await _set_ewelink_channel_state(client, device_id, 1, "on")
             logging.info("⬇️ Toldo bajando")
             return "Toldo bajando. ⬇️"
         
@@ -191,145 +266,14 @@ async def control_toldos_sonoff(accion, config):
             return f"❌ Acción desconocida: {accion}"
     
     except ImportError:
-        logging.error("❌ Librería pyewelink no instalada")
+        logging.error("❌ Librería ewelink no instalada")
         return (
-            "❌ Error: pyewelink no está instalado.\n\n"
-            "Instala con: pip install pyewelink --break-system-packages"
+            "❌ Error: ewelink no está instalado.\n\n"
+            "Instala con: pip install ewelink"
         )
     
     except Exception as e:
         logging.error(f"❌ Error en control de toldo: {e}")
-        import traceback
-        traceback.print_exc()
-        return f"❌ Error: {str(e)}"
-
-
-# ============================================================================
-# ALTERNATIVA: Usando API REST directa de eWeLink (sin librerías)
-# ============================================================================
-
-import hashlib
-import hmac
-import base64
-import time
-import json
-
-async def control_toldos_sonoff_rest_api(accion, config):
-    """
-    Control de toldos usando la API REST de eWeLink directamente.
-    
-    No requiere librerías adicionales, solo requests.
-    Más complejo pero totalmente bajo tu control.
-    """
-    try:
-        email = config["sonoff"]["email"]
-        password = config["sonoff"]["password"]
-        region = config["sonoff"].get("region", "eu")
-        device_id = config["sonoff"]["device_id_toldo"]
-        
-        # URLs por región
-        api_urls = {
-            "us": "https://us-api.coolkit.cc:8080/api",
-            "eu": "https://eu-api.coolkit.cc:8080/api", 
-            "as": "https://as-api.coolkit.cc:8080/api",
-            "cn": "https://cn-api.coolkit.cn:8080/api"
-        }
-        
-        base_url = api_urls.get(region, api_urls["eu"])
-        
-        # App credentials (públicas, están en el código de la app)
-        app_id = "oeVkj2lYFGnJu5XUtWisfW4utiN4u9Mq"
-        app_secret = "6Nz4n0LR8s1X7r1r6OAaHN6vZQqvwUL9"
-        
-        # 1. Login
-        logging.info("🔐 Autenticando con eWeLink...")
-        
-        headers = {
-            "Authorization": f"Sign {app_id}",
-            "Content-Type": "application/json"
-        }
-        
-        login_data = {
-            "email": email,
-            "password": password,
-            "appid": app_id
-        }
-        
-        response = requests.post(
-            f"{base_url}/user/login",
-            json=login_data,
-            headers=headers,
-            timeout=10
-        )
-        
-        if response.status_code != 200:
-            logging.error(f"❌ Login falló: {response.text}")
-            return f"❌ Error de login: {response.status_code}"
-        
-        result = response.json()
-        
-        if result.get('error') != 0:
-            return f"❌ Login falló: {result.get('msg', 'Error desconocido')}"
-        
-        at = result['at']  # Access token
-        logging.info("✅ Login exitoso")
-        
-        # 2. Determinar estado del dispositivo según acción
-        if accion == "PARAR":
-            switches = [
-                {"switch": "off", "outlet": 0},
-                {"switch": "off", "outlet": 1}
-            ]
-        elif accion == "SUBIR":
-            switches = [
-                {"switch": "on", "outlet": 0},
-                {"switch": "off", "outlet": 1}
-            ]
-        elif accion == "BAJAR":
-            switches = [
-                {"switch": "off", "outlet": 0},
-                {"switch": "on", "outlet": 1}
-            ]
-        else:
-            return f"❌ Acción desconocida: {accion}"
-        
-        # 3. Enviar comando
-        headers["Authorization"] = f"Bearer {at}"
-        
-        device_data = {
-            "deviceid": device_id,
-            "params": {
-                "switches": switches
-            }
-        }
-        
-        response = requests.post(
-            f"{base_url}/user/device/status",
-            json=device_data,
-            headers=headers,
-            timeout=10
-        )
-        
-        if response.status_code != 200:
-            return f"❌ Error al enviar comando: {response.status_code}"
-        
-        result = response.json()
-        
-        if result.get('error') != 0:
-            return f"❌ Error: {result.get('msg', 'Comando falló')}"
-        
-        # Mensajes de éxito
-        mensajes = {
-            "PARAR": "Toldo detenido. 🛑",
-            "SUBIR": "Toldo subiendo. ⬆️",
-            "BAJAR": "Toldo bajando. ⬇️"
-        }
-        
-        logging.info(f"✅ Comando ejecutado: {accion}")
-        return mensajes[accion]
-    
-    except Exception as e:
-        logging.error(f"❌ Error en API REST: {e}")
         import traceback
         traceback.print_exc()
         return f"❌ Error: {str(e)}"
