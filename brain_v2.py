@@ -32,7 +32,7 @@ from tools_finance import (
 )
 from tools_system import (
     crear_evento_calendar, control_openhab, 
-    obtener_ip_publica, buscar_internet, modelo_whisper, control_toldos_sonoff, exportar_a_word_premium
+    obtener_ip_publica, buscar_internet, modelo_whisper, exportar_a_word_premium
 )
 
 from evaluador_profesional import EvaluadorProfesionalCartera, formatear_informe_profesional
@@ -148,21 +148,6 @@ Ejemplo: BUSCAR: 'noticias tecnología IA'
 Formato: ACCION: 'dispositivo', 'ON'/'OFF'
 Dispositivos: salon, despacho, cocina, comedor, dormitorio, caterina, ovidi, 
              ventilador despacho, ventilador caterina, ventilador ovidi, ventilador dormitori
-
- CONTROL DE TOLDOS (especial):
-Formato: ACCION: 'toldo', 'SUBIR'/'BAJAR'/'PARAR'
-
-REGLAS DE NORMALIZACIÓN CRÍTICAS:
-1. SIEMPRE usa "toldo" (singular), nunca "toldos"
-2. Ignora artículos: "el toldo", "los toldos" → "toldo"
-3. Ejemplos correctos:
-   - Usuario: "baja el toldo" → ACCION: 'toldo', 'BAJAR'
-   - Usuario: "baja los toldos" → ACCION: 'toldo', 'BAJAR'
-   - Usuario: "sube toldos" → ACCION: 'toldo', 'SUBIR'
-   - Usuario: "para toldo" → ACCION: 'toldo', 'PARAR'
-
-NUNCA generes: ACCION: 'toldos', ... (MAL)
-SIEMPRE genera: ACCION: 'toldo', ... (BIEN)
 
 3️⃣ CALENDARIO
 Formato: CALENDAR_CREAR: 'título', 'YYYY-MM-DD', 'HH:MM'
@@ -326,10 +311,7 @@ async def procesar_comandos(texto_ai: str, client, config) -> str:
             item, state = match.group(1), match.group(2)
             logging.info(f"🏠 Acción domótica: {item} -> {state}")
             
-            if "toldo" in item.lower():
-                resultado = await control_toldos_sonoff(state.upper(), config)
-            else:
-                resultado = await asyncio.to_thread(control_openhab, item, state, config)
+            resultado = await asyncio.to_thread(control_openhab, item, state, config)
             
             respuesta = texto_ai.replace(match.group(0), resultado)
     
@@ -1170,16 +1152,17 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
         if total_visuales == 0:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="ℹ️ No se detectaron datos o modelos visualizables. Generando documento solo con texto."
+                text="ℹ️ No se detectaron datos o modelos visualizables. Generando documento estructurado."
             )
             
-            # Recorrer secciones y añadir al documento
+            # Recorrer secciones y añadir al documento con mejor estructura
             for seccion in secciones_desarrolladas:
                 doc.add_heading(seccion['titulo'], level=1)
-                parrafos = seccion['contenido'].split('\n\n')
-                for parrafo in parrafos:
-                    if parrafo.strip():
-                        doc.add_paragraph(parrafo.strip())
+                
+                # Estructurar el contenido en puntos y subpuntos
+                contenido_estructurado = _estructurar_contenido_en_puntos(seccion['contenido'])
+                _agregar_contenido_estructurado_al_doc(doc, contenido_estructurado)
+                
                 doc.add_page_break()
         
         # Guardar documento
@@ -1223,6 +1206,115 @@ async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, clie
 
 
 # ==================== FUNCIONES AUXILIARES ====================
+
+def _estructurar_contenido_en_puntos(contenido: str) -> list:
+    """
+    Convierte un bloque de texto en una estructura de puntos y subpuntos.
+    
+    Returns:
+        Lista de diccionarios con 'tipo' ('titulo', 'punto', 'subpunto', 'parrafo') y 'texto'
+    """
+    elementos = []
+    lineas = contenido.split('\n')
+    
+    for linea in lineas:
+        linea_limpia = linea.strip()
+        
+        if not linea_limpia:
+            continue
+        
+        # Detectar títulos (líneas cortas que terminan en : o son todo mayúsculas)
+        if (len(linea_limpia) < 80 and linea_limpia.endswith(':')) or \
+           (len(linea_limpia) < 80 and linea_limpia.isupper() and len(linea_limpia.split()) <= 6):
+            elementos.append({
+                'tipo': 'titulo',
+                'texto': linea_limpia.rstrip(':')
+            })
+            continue
+        
+        # Detectar puntos que empiezan con números, guiones o marcadores
+        if re.match(r'^[\d]+[\.\)]\s+', linea_limpia) or \
+           re.match(r'^[-•▪]\s+', linea_limpia):
+            # Es un punto principal
+            texto_limpio = re.sub(r'^[\d]+[\.\)]\s+|^[-•▪]\s+', '', linea_limpia)
+            elementos.append({
+                'tipo': 'punto',
+                'texto': texto_limpio
+            })
+            continue
+        
+        # Detectar subpuntos (líneas que empiezan con espacios + marcador)
+        if re.match(r'^\s{2,}[-•▪o]\s+', linea_limpia) or \
+           re.match(r'^\s{2,}[\d]+[\.\)]\s+', linea_limpia):
+            texto_limpio = re.sub(r'^\s+[-•▪o]\s+|^\s+[\d]+[\.\)]\s+', '', linea_limpia)
+            elementos.append({
+                'tipo': 'subpunto',
+                'texto': texto_limpio
+            })
+            continue
+        
+        # Si la línea es muy corta (< 100 caracteres) y termina en punto, puede ser un punto
+        if len(linea_limpia) < 100 and linea_limpia.endswith('.') and not linea_limpia.endswith('...'):
+            # Contar si hay muchas mayúsculas al principio (indicador de título/punto)
+            palabras = linea_limpia.split()
+            if palabras and palabras[0][0].isupper():
+                elementos.append({
+                    'tipo': 'punto',
+                    'texto': linea_limpia
+                })
+                continue
+        
+        # Todo lo demás es párrafo normal
+        # Pero intentar dividir frases largas en puntos si tiene sentido
+        if len(linea_limpia) > 200:
+            # Dividir por oraciones
+            frases = re.split(r'(?<=[.!?])\s+', linea_limpia)
+            for frase in frases:
+                if frase.strip():
+                    elementos.append({
+                        'tipo': 'punto' if len(frase) < 150 else 'parrafo',
+                        'texto': frase.strip()
+                    })
+        else:
+            elementos.append({
+                'tipo': 'parrafo',
+                'texto': linea_limpia
+            })
+    
+    return elementos
+
+
+def _agregar_contenido_estructurado_al_doc(doc, elementos: list):
+    """
+    Añade elementos estructurados al documento de Word.
+    
+    Args:
+        doc: Documento de python-docx
+        elementos: Lista de diccionarios con tipo y texto
+    """
+    for elemento in elementos:
+        tipo = elemento['tipo']
+        texto = elemento['texto']
+        
+        if tipo == 'titulo':
+            # Añadir como subtítulo (heading nivel 2)
+            doc.add_heading(texto, level=2)
+        
+        elif tipo == 'punto':
+            # Añadir como viñeta de nivel 1
+            p = doc.add_paragraph(texto, style='List Bullet')
+        
+        elif tipo == 'subpunto':
+            # Añadir como viñeta de nivel 2
+            p = doc.add_paragraph(texto, style='List Bullet 2')
+        
+        else:  # parrafo
+            # Párrafo normal, pero si es corto, convertir a punto
+            if len(texto) < 200:
+                doc.add_paragraph(texto, style='List Bullet')
+            else:
+                doc.add_paragraph(texto)
+
 
 async def ejecutar_evaluacion_cartera(update, client, config):
     """
