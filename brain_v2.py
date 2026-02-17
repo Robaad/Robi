@@ -1216,6 +1216,31 @@ def _estructurar_contenido_en_puntos(contenido: str) -> list:
     """
     elementos = []
     lineas = contenido.split('\n')
+
+    def _fragmentar_texto_largo(texto: str) -> list[str]:
+        """Divide texto largo en bloques cortos para evitar párrafos de varias páginas."""
+        frases = re.split(r'(?<=[.!?])\s+', texto)
+        bloques = []
+        bloque_actual = ""
+
+        for frase in frases:
+            frase = frase.strip()
+            if not frase:
+                continue
+
+            candidato = f"{bloque_actual} {frase}".strip()
+            if len(candidato) <= 240:
+                bloque_actual = candidato
+                continue
+
+            if bloque_actual:
+                bloques.append(bloque_actual)
+            bloque_actual = frase
+
+        if bloque_actual:
+            bloques.append(bloque_actual)
+
+        return bloques or [texto]
     
     for linea in lineas:
         linea_limpia = linea.strip()
@@ -1232,6 +1257,16 @@ def _estructurar_contenido_en_puntos(contenido: str) -> list:
             })
             continue
         
+        # Detectar subpuntos (sangría + marcador) usando la línea original
+        if re.match(r'^\s{2,}[-•▪o]\s+', linea) or \
+           re.match(r'^\s{2,}[\d]+[\.\)]\s+', linea):
+            texto_limpio = re.sub(r'^\s+[-•▪o]\s+|^\s+[\d]+[\.\)]\s+', '', linea).strip()
+            elementos.append({
+                'tipo': 'subpunto',
+                'texto': texto_limpio
+            })
+            continue
+
         # Detectar puntos que empiezan con números, guiones o marcadores
         if re.match(r'^[\d]+[\.\)]\s+', linea_limpia) or \
            re.match(r'^[-•▪]\s+', linea_limpia):
@@ -1239,16 +1274,6 @@ def _estructurar_contenido_en_puntos(contenido: str) -> list:
             texto_limpio = re.sub(r'^[\d]+[\.\)]\s+|^[-•▪]\s+', '', linea_limpia)
             elementos.append({
                 'tipo': 'punto',
-                'texto': texto_limpio
-            })
-            continue
-        
-        # Detectar subpuntos (líneas que empiezan con espacios + marcador)
-        if re.match(r'^\s{2,}[-•▪o]\s+', linea_limpia) or \
-           re.match(r'^\s{2,}[\d]+[\.\)]\s+', linea_limpia):
-            texto_limpio = re.sub(r'^\s+[-•▪o]\s+|^\s+[\d]+[\.\)]\s+', '', linea_limpia)
-            elementos.append({
-                'tipo': 'subpunto',
                 'texto': texto_limpio
             })
             continue
@@ -1264,17 +1289,13 @@ def _estructurar_contenido_en_puntos(contenido: str) -> list:
                 })
                 continue
         
-        # Todo lo demás es párrafo normal
-        # Pero intentar dividir frases largas en puntos si tiene sentido
-        if len(linea_limpia) > 200:
-            # Dividir por oraciones
-            frases = re.split(r'(?<=[.!?])\s+', linea_limpia)
-            for frase in frases:
-                if frase.strip():
-                    elementos.append({
-                        'tipo': 'punto' if len(frase) < 150 else 'parrafo',
-                        'texto': frase.strip()
-                    })
+        # Todo lo demás es párrafo normal, con corte automático si es largo
+        if len(linea_limpia) > 220:
+            for bloque in _fragmentar_texto_largo(linea_limpia):
+                elementos.append({
+                    'tipo': 'punto' if len(bloque) < 170 else 'parrafo',
+                    'texto': bloque
+                })
         else:
             elementos.append({
                 'tipo': 'parrafo',
