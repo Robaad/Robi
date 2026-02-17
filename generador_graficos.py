@@ -446,13 +446,52 @@ class IntegradorGraficosWord:
         
         # Dividir contenido en párrafos
         parrafos = contenido.split('\n\n')
+
+        def _agregar_texto_legible(texto: str):
+            """Añade texto al documento evitando bloques excesivamente largos."""
+            import re
+
+            bloques = [b.strip() for b in texto.split('\n') if b.strip()]
+            if not bloques:
+                return
+
+            for bloque in bloques:
+                if re.match(r'^[\d]+[\.\)]\s+', bloque):
+                    limpio = re.sub(r'^[\d]+[\.\)]\s+', '', bloque)
+                    doc.add_paragraph(limpio, style='List Number')
+                    continue
+
+                if re.match(r'^[-•▪]\s+', bloque):
+                    limpio = re.sub(r'^[-•▪]\s+', '', bloque)
+                    doc.add_paragraph(limpio, style='List Bullet')
+                    continue
+
+                if len(bloque) > 280:
+                    frases = re.split(r'(?<=[.!?])\s+', bloque)
+                    acumulado = ""
+                    for frase in frases:
+                        frase = frase.strip()
+                        if not frase:
+                            continue
+                        candidato = f"{acumulado} {frase}".strip()
+                        if len(candidato) <= 220:
+                            acumulado = candidato
+                        else:
+                            if acumulado:
+                                doc.add_paragraph(acumulado)
+                            acumulado = frase
+                    if acumulado:
+                        doc.add_paragraph(acumulado)
+                    continue
+
+                doc.add_paragraph(bloque)
         
         for i, parrafo in enumerate(parrafos):
             if not parrafo.strip():
                 continue
             
-            # Añadir párrafo
-            doc.add_paragraph(parrafo.strip())
+            # Añadir párrafo con mejor legibilidad
+            _agregar_texto_legible(parrafo.strip())
             
             # Cada 2-3 párrafos, intentar extraer datos y generar gráfico
             if i > 0 and i % 2 == 0 and graficos_añadidos < 2:  # Max 2 gráficos por sección
