@@ -9,6 +9,7 @@ Cambios principales:
 """
 
 import os
+import json
 import logging
 import re
 import asyncio
@@ -125,7 +126,49 @@ MODELO_CONVERSACION = "mistral-small-latest"  # Para chat normal
 MODELO_GENERACION = "mistral-large-latest"    # Para contenido complejo
 
 # Historial de conversaciones
+MEMORIA_PATH = os.getenv("ROBI_MEMORY_FILE", "robi_memoria.json")
 historiales = {}
+
+
+def _cargar_memoria_persistente() -> dict:
+    """Carga historiales guardados en disco si existen."""
+    if not os.path.exists(MEMORIA_PATH):
+        return {}
+
+    try:
+        with open(MEMORIA_PATH, "r", encoding="utf-8") as memoria_file:
+            memoria = json.load(memoria_file)
+        if not isinstance(memoria, dict):
+            logging.warning("⚠️ Memoria inválida: formato no reconocido")
+            return {}
+
+        memoria_limpia = {}
+        for user_id, mensajes in memoria.items():
+            if isinstance(user_id, str) and isinstance(mensajes, list):
+                memoria_limpia[user_id] = mensajes
+
+        if memoria_limpia:
+            logging.info(f"🧠 Memoria cargada: {len(memoria_limpia)} conversaciones")
+        return memoria_limpia
+    except Exception as e:
+        logging.warning(f"⚠️ No se pudo cargar memoria persistente: {e}")
+        return {}
+
+
+def _guardar_memoria_persistente() -> None:
+    """Guarda historiales en disco para mantener contexto entre reinicios."""
+    try:
+        directorio = os.path.dirname(MEMORIA_PATH)
+        if directorio:
+            os.makedirs(directorio, exist_ok=True)
+
+        with open(MEMORIA_PATH, "w", encoding="utf-8") as memoria_file:
+            json.dump(historiales, memoria_file, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.warning(f"⚠️ No se pudo guardar memoria persistente: {e}")
+
+
+historiales = _cargar_memoria_persistente()
 
 
 def generar_prompt_sistema():
@@ -227,7 +270,7 @@ async def handle_message_logic(update, context, user_text, client, config, retor
         retorno_texto: Si True, devuelve texto en lugar de enviarlo
     """
     
-    user_id = update.effective_chat.id if update else "SYSTEM_AGENT"
+    user_id = str(update.effective_chat.id) if update else "SYSTEM_AGENT"
     
     # Traducción de botones
     if user_text == "📈 Mi Cartera":
@@ -250,6 +293,7 @@ async def handle_message_logic(update, context, user_text, client, config, retor
     
     # Añadir mensaje del usuario
     historiales[user_id].append({"role": "user", "content": user_text})
+    _guardar_memoria_persistente()
     
     # Recortar historial (mantener último 10 + sistema)
     if len(historiales[user_id]) > 11:
@@ -268,6 +312,7 @@ async def handle_message_logic(update, context, user_text, client, config, retor
         
         # Guardar respuesta en historial
         historiales[user_id].append({"role": "assistant", "content": texto_ai})
+        _guardar_memoria_persistente()
         
         # Procesar comandos
         respuesta_final = await procesar_comandos(texto_ai, client, config)
@@ -428,11 +473,12 @@ async def enviar_mensaje_largo(update: Update, texto: str):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /start."""
-    user_id = update.effective_chat.id
+    user_id = str(update.effective_chat.id)
     
     # Limpiar historial
     if user_id in historiales:
         del historiales[user_id]
+        _guardar_memoria_persistente()
 
     await update.message.reply_text("🔄 Actualizando Robi desde Git...")
 
