@@ -4,10 +4,30 @@ from mistralai import Mistral
 from datetime import datetime
 import os
 import asyncio
+import tempfile
+import shutil
 
 # Estos los importamos del main o de un config compartido luego
 # Por ahora los definimos aquí para que el módulo sea funcional
 MODELO_LISTO = "mistral-large-latest"
+
+
+def _leer_excel_snapshot(ruta_excel: str, hoja: str = "Operaciones") -> pd.DataFrame:
+    """
+    Lee una copia temporal del Excel para evitar lecturas de caché/SO o archivo en escritura.
+
+    OneDrive puede estar sincronizando el fichero mientras el bot lo lee.
+    Copiamos primero a un archivo temporal y leemos esa instantánea estable.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        shutil.copy2(ruta_excel, tmp_path)
+        return pd.read_excel(tmp_path, sheet_name=hoja)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 def analizar_inversiones():
     ruta_excel = "/app/documentos/bolsav2.xlsx"
@@ -25,7 +45,10 @@ def analizar_inversiones():
 
     try:
         # 1. LEER EL EXCEL (Fundamental hacerlo primero)
-        df = pd.read_excel(ruta_excel, sheet_name='Operaciones')
+        df = _leer_excel_snapshot(ruta_excel, hoja='Operaciones')
+
+        # Metadata para confirmar frescura del archivo
+        ultima_modificacion = datetime.fromtimestamp(os.path.getmtime(ruta_excel)).strftime("%Y-%m-%d %H:%M:%S")
                      
         # --- BLOQUE ENCABEZADO (Dólar y Oro) ---
         try:
@@ -46,13 +69,17 @@ def analizar_inversiones():
             v_oro = float(val_oro) if pd.notna(val_oro) else 0.0
             p_oro = float(pct_oro) if pd.notna(pct_oro) else 0.0
 
-            header = f"📅 **Hora:** {hora_actual}\n"
+            header = f"📅 **Hora cartera:** {hora_actual}\n"
+            header += f"🕒 **Archivo actualizado:** {ultima_modificacion}\n"
             header += f"💵 **Dólar:** {v_dol:.4f}€ ({p_dol:+.2f}%)\n"
             header += f"🟡 **Oro:** {v_oro:,.2f}$/oz ({p_oro:+.2f}%)\n"
             header += "—" * 15 + "\n"
         except Exception as e:
             logging.error(f"Error en encabezado (Dólar/Oro): {e}")
-            header = "💰 **Mercados:** Datos no disponibles temporalmente\n\n"
+            header = (
+                f"💰 **Mercados:** Datos no disponibles temporalmente\n"
+                f"🕒 **Archivo actualizado:** {ultima_modificacion}\n\n"
+            )
 
         # --- FILTRAR ACTIVAS (Columna I vacía) ---
         # La columna I es el índice 8
@@ -268,7 +295,7 @@ def _formatear_oportunidades_profesional(evaluaciones, mercado):
 #--ASESON FINANCIERO--
 def super_asesor_financiero(nombre_valor: str, client, buscar_internet):
     try:
-        df = pd.read_excel("/app/documentos/bolsav2.xlsx", sheet_name='Operaciones')
+        df = _leer_excel_snapshot("/app/documentos/bolsav2.xlsx", hoja='Operaciones')
         
         # Si Mistral mandó 'acciones', intentamos ayudarle
         if nombre_valor.lower() in ["acciones", "cartera", "mis valores"]:
