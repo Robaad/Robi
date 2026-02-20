@@ -619,9 +619,11 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
         context.application.create_task(lanzar_escaner_oportunidades(update, mercado, client, config))
         return
     
-    # Resto de comandos (procesar normal)
-    peticion = user_text.replace("/", "")
-    await handle_text(update, context, client, config, peticion)
+    # Resto de comandos: NO pasar por memoria/IA.
+    # Si llega aquí, el comando no está soportado y no debemos responder con contexto previo.
+    await update.message.reply_text(
+        "❓ Comando no reconocido. Usa /inversiones, /evaluar, /oportunidades, /deep, /ip o /studio."
+    )
 
 
 async def configurar_comandos(app):
