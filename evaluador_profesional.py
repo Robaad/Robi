@@ -33,6 +33,116 @@ class EvaluadorProfesionalCartera:
         self.buscar = buscar_internet
         self.modelo = modelo
         self.buscador = BuscadorDatosWeb(buscar_internet, client, modelo)
+
+    @staticmethod
+    def _to_float(value, default=0.0):
+        try:
+            if value is None:
+                return default
+            return float(str(value).replace('%', '').replace(',', '.').strip())
+        except Exception:
+            return default
+
+    def _construir_contexto_estrategico(
+        self,
+        precio_compra: float,
+        precio_actual: float,
+        pct_ganancia: float,
+        analisis_tecnico: Dict,
+        metricas_fundamentales: Dict,
+        consenso_analistas: Dict,
+        sentimiento: Dict
+    ) -> Dict:
+        """Capa institucional: contexto de riesgo, valuación y asimetría tipo fondo estratégico."""
+        volatilidad = self._to_float((analisis_tecnico or {}).get('volatilidad', {}).get('volatilidad_anual'), 30)
+        per = self._to_float((metricas_fundamentales or {}).get('per'), 0)
+        peg = self._to_float((metricas_fundamentales or {}).get('peg'), 2)
+        deuda_patrimonio = self._to_float((metricas_fundamentales or {}).get('deuda_patrimonio'), 1)
+        crecimiento_ingresos = self._to_float((metricas_fundamentales or {}).get('crecimiento_ingresos'), 0)
+        score_sentimiento = self._to_float((sentimiento or {}).get('score'), 0)
+        precio_obj = self._to_float((consenso_analistas or {}).get('precio_objetivo_medio'), precio_actual)
+
+        gap_consenso = ((precio_obj / precio_actual) - 1) * 100 if precio_actual > 0 else 0
+
+        score_riesgo = min(
+            100,
+            max(0, (volatilidad * 1.1) + (deuda_patrimonio * 14) + (max(0, per - 25) * 1.2) - (crecimiento_ingresos * 0.7))
+        )
+        conviccion = min(100, max(0, 55 + (gap_consenso * 0.35) + (score_sentimiento * 18) - (score_riesgo * 0.3)))
+
+        if score_riesgo >= 70:
+            bucket_riesgo = 'ALTO'
+        elif score_riesgo >= 45:
+            bucket_riesgo = 'MEDIO'
+        else:
+            bucket_riesgo = 'BAJO'
+
+        if gap_consenso > 12 and score_riesgo <= 50:
+            perfil = 'ASIMETRIA_FAVORABLE'
+        elif gap_consenso < -8 or score_riesgo >= 70:
+            perfil = 'ASIMETRIA_NEGATIVA'
+        else:
+            perfil = 'ASIMETRIA_NEUTRA'
+
+        exposure_cap = 0.10
+        if bucket_riesgo == 'MEDIO':
+            exposure_cap = 0.07
+        elif bucket_riesgo == 'ALTO':
+            exposure_cap = 0.04
+
+        if pct_ganancia <= -15 and bucket_riesgo == 'ALTO':
+            exposure_cap = min(exposure_cap, 0.03)
+
+        return {
+            'bucket_riesgo': bucket_riesgo,
+            'score_riesgo_cuant': round(score_riesgo, 1),
+            'score_conviccion': round(conviccion, 1),
+            'perfil_asimetria': perfil,
+            'gap_consenso_pct': round(gap_consenso, 2),
+            'limite_exposicion': exposure_cap,
+            'peg': peg
+        }
+
+    def _ajustar_recomendacion_realista(self, recomendacion: Dict, contexto_estrategico: Dict, precio_actual: float) -> Dict:
+        """Normaliza sesgos optimistas y aplica controles de riesgo institucionales."""
+        rec = dict(recomendacion or {})
+
+        upside = self._to_float(rec.get('upside_potencial'), 0)
+        downside = abs(self._to_float(rec.get('downside_riesgo'), 0))
+        riesgo_cuant = self._to_float(contexto_estrategico.get('score_riesgo_cuant'), 50)
+
+        if upside > 45:
+            upside = 45
+        if downside == 0:
+            downside = max(6, round(upside * 0.55, 1))
+        elif downside > upside * 1.2 and upside > 0:
+            upside = round(max(2.5, downside * 0.85), 1)
+
+        if riesgo_cuant >= 70 and rec.get('accion') in ['COMPRAR', 'AUMENTAR']:
+            rec['accion'] = 'MANTENER'
+            rec['razon_principal'] = (
+                "Se evita aumentar por riesgo elevado y asimetría limitada en el contexto actual."
+            )
+
+        rec['upside_potencial'] = round(upside, 1)
+        rec['downside_riesgo'] = round(downside, 1)
+        rec['contexto_estrategico'] = contexto_estrategico
+
+        stop = self._to_float(rec.get('stop_loss'), 0)
+        take = self._to_float(rec.get('take_profit'), 0)
+
+        if precio_actual > 0:
+            if stop <= 0:
+                stop = precio_actual * (1 - min(0.18, max(0.06, downside / 100)))
+            if take <= 0:
+                take = precio_actual * (1 + min(0.35, max(0.08, upside / 100)))
+            rec['stop_loss'] = round(stop, 2)
+            rec['take_profit'] = round(take, 2)
+
+        if rec.get('confianza_score') is not None:
+            rec['confianza_score'] = min(0.82, max(0.35, self._to_float(rec.get('confianza_score'), 0.55)))
+
+        return rec
     
     async def evaluar_cartera_completa(self, ruta_excel: str) -> Dict:
         """
@@ -88,7 +198,7 @@ class EvaluadorProfesionalCartera:
                 'total_posiciones': len(evaluaciones),
                 'resumen': resumen,
                 'evaluaciones': evaluaciones,
-                'metodologia': 'Análisis Multi-Capa: Técnico + Fundamental + Consenso + Sentimiento'
+                'metodologia': 'Análisis Multi-Capa: Técnico + Fundamental + Consenso + Sentimiento + Capa Estratégica'
             }
         
         except Exception as e:
@@ -130,7 +240,7 @@ class EvaluadorProfesionalCartera:
                 'total_posiciones': 1,
                 'resumen': resumen,
                 'evaluaciones': [evaluacion],
-                'metodologia': 'Análisis Multi-Capa: Técnico + Fundamental + Consenso + Sentimiento'
+                'metodologia': 'Análisis Multi-Capa: Técnico + Fundamental + Consenso + Sentimiento + Capa Estratégica'
             }
         except Exception as e:
             logging.error(f"Error evaluando valor único: {e}")
@@ -262,6 +372,16 @@ class EvaluadorProfesionalCartera:
         Usa IA para ponderar las señales conflictivas.
         """
         
+        contexto_estrategico = self._construir_contexto_estrategico(
+            precio_compra=precio_compra,
+            precio_actual=precio_actual,
+            pct_ganancia=pct_ganancia,
+            analisis_tecnico=analisis_tecnico,
+            metricas_fundamentales=metricas_fundamentales,
+            consenso_analistas=consenso_analistas,
+            sentimiento=sentimiento
+        )
+
         # Construir contexto para la IA
         contexto = f"""ANÁLISIS COMPLETO DE {ticker} - {nombre}
 
@@ -319,24 +439,34 @@ ANÁLISIS DE SENTIMIENTO:
 - Catalizadores Positivos: {', '.join(sentimiento.get('catalizadores_positivos', []))}
 - Riesgos: {', '.join(sentimiento.get('riesgos', []))}
 - Eventos Próximos: {', '.join(sentimiento.get('eventos_proximos', []))}
+
+CAPA ESTRATÉGICA (MARCO FONDO INSTITUCIONAL):
+- Bucket de riesgo: {contexto_estrategico['bucket_riesgo']} (score cuantitativo: {contexto_estrategico['score_riesgo_cuant']}/100)
+- Convicción agregada: {contexto_estrategico['score_conviccion']}/100
+- Perfil de asimetría: {contexto_estrategico['perfil_asimetria']}
+- Gap vs consenso de analistas: {contexto_estrategico['gap_consenso_pct']:+.2f}%
+- Límite sugerido de exposición por posición: {contexto_estrategico['limite_exposicion']:.0%}
 """
         
         # Prompt para síntesis profesional
         prompt = f"""{contexto}
 
-TAREA: Como gestor profesional de un hedge fund, sintetiza TODOS estos análisis y genera una recomendación final.
+TAREA: Como comité de inversión de un fondo long/short, sintetiza TODOS estos análisis y genera una recomendación final REALISTA.
 
 CRITERIOS DE DECISIÓN:
-1. Ponderar análisis técnico (30%), fundamental (30%), consenso (25%), sentimiento (15%)
+1. Ponderar análisis técnico (25%), fundamental (35%), consenso (20%), sentimiento (10%), capa estratégica (10%)
 2. Si hay señales conflictivas, priorizar datos más recientes y confiables
 3. Considerar el contexto de la posición actual (ganancia/pérdida acumulada)
-4. Aplicar gestión de riesgo profesional
+4. Aplicar gestión de riesgo profesional y sizing por límite de exposición
+5. Evitar sesgo optimista: usa supuestos prudentes y reconoce incertidumbre
 
 REGLAS ESTRICTAS:
 - Si ganancia > +25% y señales técnicas de sobrecompra → TOMAR_BENEFICIOS (al menos parcial)
 - Si pérdida > -20% y análisis negativo → CORTAR_PERDIDAS
 - Si volatilidad MUY_ALTA + pérdidas → REDUCIR_EXPOSICION
 - Si consenso Strong Buy + técnico alcista + fundamentales sólidos → MANTENER o AUMENTAR
+- No proyectar upside >45% salvo evidencia excepcional cuantificada
+- Si PER>40 y PEG>2 con crecimiento débil, NO recomendar COMPRAR agresivo
 
 Responde en JSON:
 {{
@@ -354,18 +484,29 @@ Responde en JSON:
   "razon_principal": "Razón clara en 1 frase (máx 150 chars)",
   "argumentos_principales": ["Argumento 1", "Argumento 2", "Argumento 3"],
   "riesgos_principales": ["Riesgo 1", "Riesgo 2"],
+  "escenarios": {{
+    "bajista": "impacto breve y condición de activación",
+    "base": "caso central realista",
+    "alcista": "escenario exigente pero plausible"
+  }},
+  "plan_ejecucion": {{
+    "entrada": "condición de entrada o no entrada",
+    "gestion": "cómo gestionar tamaño y riesgo",
+    "salida": "criterios claros de salida"
+  }},
   "ponderacion": {{
     "tecnico": 0.X,
     "fundamental": 0.X,
     "consenso": 0.X,
-    "sentimiento": 0.X
+    "sentimiento": 0.X,
+    "estrategico": 0.X
   }},
   "señal_tecnica": "ALCISTA|BAJISTA|NEUTRAL",
   "señal_fundamental": "POSITIVA|NEGATIVA|NEUTRAL",
   "nivel_precio": "INFRAVALORADO|JUSTO|SOBREVALORADO"
 }}
 
-Sé riguroso y profesional. Esta recomendación afecta dinero real.
+Sé riguroso, concreto y sin marketing. Esta recomendación afecta dinero real.
 """
         
         try:
@@ -379,6 +520,7 @@ Sé riguroso y profesional. Esta recomendación afecta dinero real.
             
             import json
             recomendacion = json.loads(response.choices[0].message.content)
+            recomendacion = self._ajustar_recomendacion_realista(recomendacion, contexto_estrategico, precio_actual)
             
             logging.info(f"  ✅ Recomendación: {recomendacion.get('accion')} (Confianza: {recomendacion.get('confianza')})")
             
@@ -388,7 +530,8 @@ Sé riguroso y profesional. Esta recomendación afecta dinero real.
             logging.error(f"Error sintetizando recomendación: {e}")
             return {
                 'accion': 'ERROR',
-                'razon_principal': f"No se pudo completar el análisis: {str(e)}"
+                'razon_principal': f"No se pudo completar el análisis: {str(e)}",
+                'contexto_estrategico': contexto_estrategico
             }
     
     def _generar_resumen_ejecutivo(self, evaluaciones: List[Dict]) -> str:
@@ -429,7 +572,7 @@ Sé riguroso y profesional. Esta recomendación afecta dinero real.
         
         resumen = f"""📊 **RESUMEN EJECUTIVO - ANÁLISIS PROFESIONAL**
 
-**Metodología:** Análisis Multi-Capa (Técnico + Fundamental + Consenso + Sentimiento)
+**Metodología:** Análisis Multi-Capa (Técnico + Fundamental + Consenso + Sentimiento + Capa Estratégica)
 
 **Posiciones Analizadas:** {total}
 
@@ -570,6 +713,14 @@ def formatear_evaluacion_individual_profesional(ev: Dict) -> str:
             msg += f"• Valoración: {mf.get('valoracion').upper()}\n"
         msg += "\n"
     
+    # Capa estratégica resumida
+    cx = rec.get('contexto_estrategico', {})
+    if cx:
+        msg += "**Marco Estratégico:**\n"
+        msg += f"• Riesgo Cuant: {cx.get('bucket_riesgo', 'N/A')} ({cx.get('score_riesgo_cuant', 'N/A')}/100)\n"
+        msg += f"• Asimetría: {cx.get('perfil_asimetria', 'N/A')} | Gap consenso: {cx.get('gap_consenso_pct', 0):+.1f}%\n"
+        msg += f"• Límite exposición sugerido: {cx.get('limite_exposicion', 0):.0%}\n\n"
+
     # Argumentos principales
     if rec.get('argumentos_principales'):
         args = rec['argumentos_principales'][:2]  # Max 2
