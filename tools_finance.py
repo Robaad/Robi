@@ -32,6 +32,10 @@ def _leer_excel_snapshot(ruta_excel: str, hoja: str = "Operaciones") -> pd.DataF
 def analizar_inversiones():
     ruta_excel = "/app/documentos/bolsav2.xlsx"
     
+    mtime = os.path.getmtime(ruta_excel)
+    size = os.path.getsize(ruta_excel)
+    logging.warning(f"📁 Excel: mtime={mtime}, size={size} bytes")
+
     # AÑADIR VALIDACIONES
     if not os.path.exists(ruta_excel):
         logging.error(f"❌ No existe {ruta_excel}")
