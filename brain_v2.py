@@ -642,7 +642,7 @@ async def configurar_comandos(app):
     """Configura el menú de comandos de Telegram."""
     comandos = [
         ("inversiones", "Ver balance de cartera"),
-        ("seguimiento", "Ver lista de seguimiento (V/X/Y)"),
+        ("seguimiento", "Ver lista de seguimiento"),
         ("evaluar", "Evaluar cartera y obtener recomendaciones"),
         ("oportunidades", "Buscar oportunidades de inversión"),
         ("deep", "Análisis profundo de valor"),

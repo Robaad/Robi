@@ -150,8 +150,8 @@ def obtener_lista_seguimiento():
         ultima_modificacion = datetime.fromtimestamp(os.path.getmtime(ruta_excel)).strftime("%Y-%m-%d %H:%M:%S")
 
         # Columnas Excel: V=21, X=23, Y=24 (index 0-based)
-        seguimiento = df.iloc[:, [21, 23, 24]].copy()
-        seguimiento.columns = ["nombre", "valor_actual", "pct_diario"]
+        seguimiento = df.iloc[:, [21, 23, 24, 25]].copy()
+        seguimiento.columns = ["nombre", "valor_actual", "pct_diario", "entrada"]
         seguimiento = seguimiento[seguimiento["nombre"].notna()]
 
         if seguimiento.empty:
@@ -171,11 +171,16 @@ def obtener_lista_seguimiento():
             nombre = str(fila["nombre"]).strip()
             valor_actual = float(fila["valor_actual"]) if pd.notna(fila["valor_actual"]) else 0.0
             pct_diario = float(fila["pct_diario"]) * 100 if pd.notna(fila["pct_diario"]) else 0.0
+            entrada = float(fila["entrada"]) if pd.notna(fila["entrada"]) else 0.0
             icono = "🟢" if pct_diario >= 0 else "🔴"
+            icono_entrada = "🟢" if entrada >= valor_actual else "🔴"
 
             reporte += f"{icono} **{nombre}**\n"
             reporte += f"   Valor actual: {valor_actual:,.2f}\n"
-            reporte += f"   % diario: {pct_diario:+.2f}%\n\n"
+            reporte += f"   % diario: {pct_diario:+.2f}%\n"
+            if (entrada > 0.0):
+                reporte += f"   % Entrada: {entrada:,.2f} {icono_entrada}"
+            reporte += "\n\n"
 
         return reporte
     except Exception as e:
