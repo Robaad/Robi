@@ -29,7 +29,8 @@ from content_engine import ContentEngine, AnalisisFinanciero
 # Importar herramientas existentes
 from tools_finance import (
     analizar_inversiones,
-    buscar_oportunidades_inversion
+    buscar_oportunidades_inversion,
+    obtener_lista_seguimiento
 )
 from tools_system import (
     crear_evento_calendar, control_openhab, 
@@ -571,6 +572,17 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
             logging.error(f"Error en /inversiones: {e}")
             await update.message.reply_text(f"❌ Error al consultar inversiones: {str(e)}")
         return
+
+    # SEGUIMIENTO (lista watchlist V/X/Y)
+    elif user_text.startswith("/seguimiento"):
+        logging.info("👀 Comando /seguimiento ejecutado directamente")
+        try:
+            resultado = await asyncio.to_thread(obtener_lista_seguimiento)
+            await enviar_mensaje_largo(update, resultado)
+        except Exception as e:
+            logging.error(f"Error en /seguimiento: {e}")
+            await update.message.reply_text(f"❌ Error al consultar seguimiento: {str(e)}")
+        return
     
     # EVALUAR CARTERA (ejecutar directamente)
     elif user_text.startswith("/evaluar"):
@@ -622,7 +634,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
     # Resto de comandos: NO pasar por memoria/IA.
     # Si llega aquí, el comando no está soportado y no debemos responder con contexto previo.
     await update.message.reply_text(
-        "❓ Comando no reconocido. Usa /inversiones, /evaluar, /oportunidades, /deep, /ip o /studio."
+        "❓ Comando no reconocido. Usa /inversiones, /seguimiento, /evaluar, /oportunidades, /deep, /ip o /studio."
     )
 
 
@@ -630,6 +642,7 @@ async def configurar_comandos(app):
     """Configura el menú de comandos de Telegram."""
     comandos = [
         ("inversiones", "Ver balance de cartera"),
+        ("seguimiento", "Ver lista de seguimiento (V/X/Y)"),
         ("evaluar", "Evaluar cartera y obtener recomendaciones"),
         ("oportunidades", "Buscar oportunidades de inversión"),
         ("deep", "Análisis profundo de valor"),
