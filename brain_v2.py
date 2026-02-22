@@ -46,6 +46,11 @@ ESPERANDO_PROMPT_STUDIO = {}
 
 STUDIO_TIPOS = [
     {
+        "id": "practica_asignatura",
+        "label": "Práctica de asignatura (ESO/FP Informática)",
+        "keywords": ["practica", "práctica", "fp", "informatica", "informática", "asignatura"],
+    },
+    {
         "id": "estudio_academico",
         "label": "Estudio académico",
         "keywords": ["estudio academico", "academico", "académico"],
@@ -775,7 +780,8 @@ async def recibir_prompt_studio(update, context, client, config):
             studio_flow["step"] = "prompt"
             studio_flow["data"] = datos
             await update.message.reply_text(
-                "¡Listo! Ahora envíame el tema y requisitos específicos del informe."
+                "¡Listo! Ahora envíame la asignatura y requisitos específicos.\n"
+                "Ejemplo: 'Sistemas Informáticos (FP DAW), práctica sobre redes con enunciado, guía paso a paso y resolución completa'."
             )
             return True
 
@@ -800,7 +806,7 @@ async def recibir_prompt_studio(update, context, client, config):
 
     await update.message.reply_text(
         "🚀 **Agente Studio V2 iniciado**\n\n"
-        "Voy a generar un informe profesional con:\n"
+        "Voy a generar un documento profesional con:\n"
         "✅ Estructura optimizada\n"
         "✅ Contenido denso y específico\n"
         "✅ Validación de calidad\n\n"
@@ -981,6 +987,9 @@ def _resolver_tipo_estudio(prompt_usuario: str, preferencias: dict | None) -> st
     tipo_id = (preferencias or {}).get("tipo", {}).get("id")
     prompt_lower = prompt_usuario.lower()
 
+    if tipo_id == "practica_asignatura":
+        return "practica_asignatura"
+
     if tipo_id == "investigacion_mercado":
         return "investigacion"
 
@@ -1016,6 +1025,9 @@ def _resolver_tono_estudio(preferencias: dict | None) -> str:
 
 
 def _resolver_perfil_redactor(preferencias: dict | None) -> str:
+    tipo_id = (preferencias or {}).get("tipo", {}).get("id")
+    if tipo_id == "practica_asignatura":
+        return "docente de FP Informática"
     tipo_label = (preferencias or {}).get("tipo", {}).get("label")
     return tipo_label or "académico"
 

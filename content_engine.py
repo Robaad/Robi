@@ -131,6 +131,7 @@ class ContentEngine:
             'programacion_didactica': self._template_programacion_didactica,
             'investigacion': self._template_investigacion,
             'tfg': self._template_tfg,
+            'practica_asignatura': self._template_practica_asignatura,
             'general': self._template_general
         }
         
@@ -253,6 +254,12 @@ Texto directo sin markdown ni asteriscos. Solo párrafos bien estructurados y se
             "tfg": {
                 "breve": 6,
                 "medio": 7,
+                "completo": 8,
+                "extenso": 10,
+            },
+            "practica_asignatura": {
+                "breve": 4,
+                "medio": 6,
                 "completo": 8,
                 "extenso": 10,
             },
@@ -458,6 +465,34 @@ Responde SOLO con el listado numerado específico para este tema.
 Máximo {max_secciones} secciones principales.
 """
     
+    def _template_practica_asignatura(self, tema: str, nivel: str, extension: str) -> str:
+        """Template para prácticas guiadas de asignaturas (ESO/FP informática)."""
+        max_secciones = {
+            "breve": 5,
+            "medio": 7,
+            "completo": 9,
+            "extenso": 11,
+        }.get(extension, 9)
+
+        return f"""Genera un ÍNDICE para una práctica de la asignatura: {tema}
+
+Nivel educativo: {nivel}
+
+La práctica DEBE incluir estos bloques, adaptados al tema:
+1. Enunciado de la práctica
+2. Objetivos de aprendizaje y competencias
+3. Requisitos previos y recursos necesarios
+4. Explicación paso a paso de cómo realizarla
+5. Desarrollo/realización completa (solución guiada)
+6. Criterios de evaluación y rúbrica
+7. Entregables finales y checklist de verificación
+
+En FP Informática, prioriza actividades aplicadas (código, sistemas, redes, bases de datos, seguridad o despliegue) con enfoque práctico.
+
+Responde SOLO con el listado numerado de secciones, sin explicaciones.
+Máximo {max_secciones} secciones principales.
+"""
+
     def _template_general(self, tema: str, nivel: str, extension: str) -> str:
         """Template genérico adaptable."""
         num_secciones = {
