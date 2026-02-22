@@ -133,6 +133,52 @@ def analizar_inversiones():
         return f"❌ Error: {str(e)}"
 
 
+def obtener_lista_seguimiento():
+    """Lee la lista de seguimiento desde columnas V (nombre), X (valor), Y (% diario)."""
+    ruta_excel = "/app/documentos/bolsav2.xlsx"
+
+    if not os.path.exists(ruta_excel):
+        logging.error(f"❌ No existe {ruta_excel}")
+        return "❌ No encuentro tu archivo de inversiones para leer el seguimiento."
+
+    try:
+        df = _leer_excel_snapshot(ruta_excel, hoja="Operaciones")
+        ultima_modificacion = datetime.fromtimestamp(os.path.getmtime(ruta_excel)).strftime("%Y-%m-%d %H:%M:%S")
+
+        # Columnas Excel: V=21, X=23, Y=24 (index 0-based)
+        seguimiento = df.iloc[:, [21, 23, 24]].copy()
+        seguimiento.columns = ["nombre", "valor_actual", "pct_diario"]
+        seguimiento = seguimiento[seguimiento["nombre"].notna()]
+
+        if seguimiento.empty:
+            return (
+                "👀 **Seguimiento**\n"
+                f"🕒 Archivo actualizado: {ultima_modificacion}\n\n"
+                "No hay valores en la columna V."
+            )
+
+        reporte = (
+            "👀 **Seguimiento**\n"
+            f"🕒 Archivo actualizado: {ultima_modificacion}\n"
+            "━━━━━━━━━━━━━━\n"
+        )
+
+        for _, fila in seguimiento.iterrows():
+            nombre = str(fila["nombre"]).strip()
+            valor_actual = float(fila["valor_actual"]) if pd.notna(fila["valor_actual"]) else 0.0
+            pct_diario = float(fila["pct_diario"]) * 100 if pd.notna(fila["pct_diario"]) else 0.0
+            icono = "🟢" if pct_diario >= 0 else "🔴"
+
+            reporte += f"{icono} **{nombre}**\n"
+            reporte += f"   Valor actual: {valor_actual:,.2f}\n"
+            reporte += f"   % diario: {pct_diario:+.2f}%\n\n"
+
+        return reporte
+    except Exception as e:
+        logging.error(f"Error al leer seguimiento en el Excel: {e}")
+        return f"❌ Error leyendo seguimiento: {str(e)}"
+
+
 # =============================================================================
 # NUEVA FUNCIÓN: buscar_oportunidades_inversion con evaluador profesional
 # =============================================================================
