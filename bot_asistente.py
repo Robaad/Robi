@@ -20,7 +20,9 @@ from brain_v2 import (
     start_command,
     configurar_comandos,
     crear_studio_command,
-    recibir_prompt_studio
+    crear_studiodiario_command,
+    recibir_prompt_studio,
+    programar_studio_diario
 )
 
 # ---------------- LOGS ----------------
@@ -63,7 +65,9 @@ if __name__ == "__main__":
     # 2. Configurar el menú de comandos
     async def post_init(application):
         await configurar_comandos(application)
+        programar_studio_diario(application, client, config)
         logging.info("✅ Menú de comandos configurado")
+        logging.info("✅ Programación /studiodiario activa")
 
     # 3. Construir la aplicación
     app = (
@@ -81,6 +85,11 @@ if __name__ == "__main__":
         await crear_studio_command(update, context, client, config)
 
     app.add_handler(CommandHandler(["studio", "sudio"], studio_wrapper))
+
+    async def studiodiario_wrapper(update, context):
+        await crear_studiodiario_command(update, context, client, config)
+
+    app.add_handler(CommandHandler(["studiodiario"], studiodiario_wrapper))
     app.add_handler(CommandHandler(["oportunidades", "inversiones", "seguimiento", "evaluar", "ip", "deep"], command_wrapper))
     
 
