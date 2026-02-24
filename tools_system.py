@@ -1,13 +1,13 @@
 import logging
-import requests
 import platform
-import whisper
 from pathlib import Path
+
+import requests
+import whisper
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
-import platform
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -16,14 +16,33 @@ from datetime import datetime
 
 
 if platform.system() == "Windows":
-    WHISPER_CACHE = Path("./whisper_models")  # Windows: carpeta local
+    WHISPER_CACHE = Path("./whisper_models")
 else:
-    WHISPER_CACHE = Path("/app/whisper_models")  # Linux/Docker
+    WHISPER_CACHE = Path("/app/whisper_models")
 
 WHISPER_CACHE.mkdir(exist_ok=True)
 
-logging.info("Cargando modelo Whisper local...")
-modelo_whisper = whisper.load_model("base", download_root=str(WHISPER_CACHE))
+
+class LazyWhisperModel:
+    """Carga Whisper bajo demanda para reducir tiempo de arranque y memoria inicial."""
+
+    def __init__(self, model_name: str = "base", cache_dir: Path = WHISPER_CACHE):
+        self.model_name = model_name
+        self.cache_dir = cache_dir
+        self._model = None
+
+    def _ensure_model(self):
+        if self._model is None:
+            logging.info("Cargando modelo Whisper local (%s)...", self.model_name)
+            self._model = whisper.load_model(self.model_name, download_root=str(self.cache_dir))
+        return self._model
+
+    def transcribe(self, *args, **kwargs):
+        model = self._ensure_model()
+        return model.transcribe(*args, **kwargs)
+
+
+modelo_whisper = LazyWhisperModel()
 
 # ---------------- GOOGLE CALENDAR ----------------
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
@@ -124,6 +143,7 @@ def obtener_ip_publica():
         for servicio in servicios:
             try:
                 r = requests.get(servicio, timeout=5)
+                r.raise_for_status()
                 if "ipify" in servicio:
                     ip = r.json()["ip"]
                 elif "myip" in servicio:
@@ -133,7 +153,7 @@ def obtener_ip_publica():
                 
                 logging.info(f"✅ IP pública obtenida: {ip}")
                 return f"Tu IP pública es: {ip}"
-            except:
+            except Exception:
                 continue
         
         return "❌ No pude obtener la IP pública"

@@ -2,29 +2,28 @@ services:
   asistente-ia:
     build: .
     container_name: bot_asistente
-    restart: unless-stopped # 🔹 Mejor que 'always' para desarrollo
+    restart: unless-stopped
     stdin_open: true
     tty: true
     volumes:
-      - .:/app # Código y config
-      - whisper-cache:/app/whisper_models # 🔹 Persiste modelo Whisper
-      - "C:/Users/Robert/OneDrive/Documentos:/app/documentos"
+      - .:/app
+      - whisper-cache:/app/whisper_models
+      - ${DOCUMENTOS_PATH:-./documentos}:/app/documentos
       - bot_ssh:/root/.ssh
     environment:
       - PYTHONUNBUFFERED=1
-      - TZ=Europe/Madrid # 🔹 Zona horaria para logs y calendar
+      - TZ=Europe/Madrid
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    # 🔹 Healthcheck para monitoreo
     healthcheck:
-      test: [ "CMD-SHELL", "pgrep -f bot_asistente.py || exit 1" ]
+      test: ["CMD-SHELL", "pgrep -f bot_asistente.py || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
 
 volumes:
-  whisper-cache: # 🔹 Evita redescargar el modelo en cada rebuild
+  whisper-cache:
   bot_ssh:
