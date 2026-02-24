@@ -16,12 +16,14 @@ import asyncio
 import unicodedata
 import subprocess
 import sys
+import requests
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from datetime import time
 from docx import Document
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
 from mistralai import Mistral
-from datetime import datetime
 
 # Importar motores especializados
 from content_engine import ContentEngine, AnalisisFinanciero
@@ -98,6 +100,7 @@ STUDIO_NIVEL = [
     {"id": "intermedio", "label": "Intermedio", "keywords": ["intermedio", "medio"]},
     {"id": "avanzado", "label": "Avanzado", "keywords": ["avanzado", "experto"]},
 ]
+
 
 
 def _normalizar_texto(texto: str) -> str:
@@ -475,6 +478,162 @@ async def enviar_mensaje_largo(update: Update, texto: str):
         logging.error(f"Error enviando mensaje: {e}")
 
 
+async def enviar_mensaje_largo_chat(context: ContextTypes.DEFAULT_TYPE, chat_id: int, texto: str):
+    """Envía mensajes largos a un chat sin depender del objeto update."""
+    MAX_LENGTH = 4000
+    try:
+        if len(texto) > MAX_LENGTH:
+            for i in range(0, len(texto), MAX_LENGTH):
+                await context.bot.send_message(chat_id=chat_id, text=texto[i:i + MAX_LENGTH])
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=texto)
+    except Exception as e:
+        logging.error(f"Error enviando mensaje largo al chat {chat_id}: {e}")
+
+
+def _buscar_contexto_mercados_diario(config: dict, query: str) -> str:
+    """Consulta Tavily sin timeout explícito para no cortar informes largos."""
+    api_key = config.get("tavily", {}).get("api_key")
+    if not api_key:
+        return "⚠️ No hay API key de Tavily configurada."
+
+    response = requests.post(
+        "https://api.tavily.com/search",
+        json={
+            "api_key": api_key,
+            "query": query,
+            "search_depth": "advanced",
+            "max_results": 8,
+            "include_answer": True,
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+    resultados = data.get("results", [])
+
+    bloques = []
+    answer = data.get("answer")
+    if answer:
+        bloques.append(f"Resumen inicial: {answer}")
+
+    for i, item in enumerate(resultados, start=1):
+        titulo = item.get("title", "Sin título")
+        contenido = item.get("content", "Sin contenido")
+        url = item.get("url", "")
+        bloques.append(f"Fuente {i}: {titulo}\n{contenido}\nURL: {url}")
+
+    return "\n\n".join(bloques) if bloques else "Sin resultados relevantes."
+
+
+async def generar_informe_studio_diario(client, config) -> str:
+    """Genera el informe diario de mercados y cartera (sin límite interno de tiempo)."""
+    fecha_hoy = datetime.now(ZoneInfo("Europe/Madrid"))
+    fecha_ayer = fecha_hoy - timedelta(days=1)
+    resumen_cartera = await asyncio.to_thread(analizar_inversiones)
+
+    query = (
+        "latest market recap previous session Nasdaq Composite IBEX 35 gold spot XAUUSD "
+        "main drivers why markets moved analyst commentary macro events and what to watch today"
+    )
+    contexto_mercados = await asyncio.to_thread(_buscar_contexto_mercados_diario, config, query)
+
+    prompt = f"""
+    Eres un analista financiero senior. Genera un informe diario en español, claro y accionable.
+
+    FECHA INFORME: {fecha_hoy.strftime('%Y-%m-%d')}
+    DÍA ANALIZADO (AYER): {fecha_ayer.strftime('%Y-%m-%d')}
+
+    DATOS DE CARTERA DEL USUARIO:
+    {resumen_cartera}
+
+    CONTEXTO DE MERCADOS (WEB):
+    {contexto_mercados}
+
+    OBJETIVO DEL INFORME (OBLIGATORIO):
+    1) Qué ocurrió ayer con sus acciones.
+    2) Por qué subieron o cayeron (motivos concretos si están disponibles).
+    3) Qué pasó en Nasdaq, IBEX y oro.
+    4) Qué se espera para hoy (escenarios y catalizadores a vigilar).
+
+    FORMATO DE SALIDA:
+    - Título: "📊 Studio Diario - Resumen de Mercados"
+    - Sección 1: "Tu cartera ayer"
+    - Sección 2: "Mercados: Nasdaq, IBEX y Oro"
+    - Sección 3: "Claves para hoy"
+    - Sección 4: "Plan rápido (3 acciones recomendadas)"
+    - Estilo claro, sin relleno, y con viñetas.
+    """
+
+    respuesta = await asyncio.to_thread(
+        client.chat.complete,
+        model=MODELO_GENERACION,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+    )
+    return respuesta.choices[0].message.content
+
+
+async def ejecutar_studio_diario_en_background(chat_id: int, context: ContextTypes.DEFAULT_TYPE, client, config):
+    """Ejecuta Studio Diario en background y envía el resultado al chat indicado."""
+    try:
+        informe = await generar_informe_studio_diario(client, config)
+        await enviar_mensaje_largo_chat(context, chat_id, informe)
+    except Exception as e:
+        logging.error(f"Error generando Studio Diario: {e}")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "❌ Error generando /studiodiario.\n"
+                f"Detalle: {str(e)}"
+            ),
+        )
+
+
+async def studio_diario_programado_callback(context: ContextTypes.DEFAULT_TYPE):
+    """Job programado de lunes a viernes a las 07:00."""
+    job_data = context.job.data or {}
+    chat_id = job_data.get("chat_id")
+    client = job_data.get("client")
+    config = job_data.get("config")
+
+    if not chat_id or not client or not config:
+        logging.error("❌ Job Studio Diario sin parámetros obligatorios")
+        return
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "⏳ Iniciando informe automático /studiodiario...\n"
+            "Se está ejecutando en background y puede tardar lo necesario."
+        ),
+    )
+    context.application.create_task(ejecutar_studio_diario_en_background(chat_id, context, client, config))
+
+
+def programar_studio_diario(app, client, config):
+    """Programa el informe diario de lunes a viernes a las 07:00 (Europe/Madrid)."""
+    allowed_users = config.get("telegram", {}).get("allowed_users", [])
+    if not allowed_users:
+        logging.warning("⚠️ No hay allowed_users para programar /studiodiario")
+        return
+
+    chat_id = allowed_users[0]
+    tz = ZoneInfo("Europe/Madrid")
+    hora_objetivo = time(hour=7, minute=0, tzinfo=tz)
+
+    for job in app.job_queue.get_jobs_by_name("studio_diario_weekdays"):
+        job.schedule_removal()
+
+    app.job_queue.run_daily(
+        studio_diario_programado_callback,
+        time=hora_objetivo,
+        days=(0, 1, 2, 3, 4),
+        name="studio_diario_weekdays",
+        data={"chat_id": chat_id, "client": client, "config": config},
+    )
+    logging.info("✅ /studiodiario programado L-V 07:00 (Europe/Madrid)")
+
+
 # ==================== COMANDOS ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -616,6 +775,11 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
         await update.message.reply_text(resultado)
         return
     
+    # STUDIO DIARIO (ejecutar en background)
+    elif user_text.startswith("/studiodiario"):
+        await crear_studiodiario_command(update, context, client, config)
+        return
+
     # OPORTUNIDADES (ejecutar en background)
     elif user_text.startswith("/oportunidades"):
         mercado = user_text.replace("/oportunidades", "").strip()
@@ -639,7 +803,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
     # Resto de comandos: NO pasar por memoria/IA.
     # Si llega aquí, el comando no está soportado y no debemos responder con contexto previo.
     await update.message.reply_text(
-        "❓ Comando no reconocido. Usa /inversiones, /seguimiento, /evaluar, /oportunidades, /deep, /ip o /studio."
+        "❓ Comando no reconocido. Usa /inversiones, /seguimiento, /evaluar, /oportunidades, /deep, /ip, /studio o /studiodiario."
     )
 
 
@@ -653,9 +817,28 @@ async def configurar_comandos(app):
         ("deep", "Análisis profundo de valor"),
         ("ip", "Consultar IP pública"),
         ("studio", "Generar informe/estudio"),
+        ("studiodiario", "Informe diario de mercados"),
         ("start", "Reiniciar Robi")
     ]
     await app.bot.set_my_commands(comandos)
+
+
+
+async def crear_studiodiario_command(update: Update, context: ContextTypes.DEFAULT_TYPE, client=None, config=None):
+    """Comando /studiodiario - genera informe diario en background a demanda."""
+    allowed_users = (config or {}).get("telegram", {}).get("allowed_users", [])
+    if allowed_users and update.effective_chat.id not in allowed_users:
+        logging.warning(f"Usuario no autorizado (/studiodiario): {update.effective_chat.id}")
+        return
+
+    chat_id = update.effective_chat.id
+
+    await update.message.reply_text(
+        "🚀 /studiodiario iniciado en background.\n"
+        "No tiene límite de tiempo y tardará lo necesario. Te enviaré el informe al terminar."
+    )
+    context.application.create_task(ejecutar_studio_diario_en_background(chat_id, context, client, config))
+
 
 
 # ==================== STUDIO (NUEVO) ====================
