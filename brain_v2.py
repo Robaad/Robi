@@ -491,6 +491,40 @@ async def enviar_mensaje_largo_chat(context: ContextTypes.DEFAULT_TYPE, chat_id:
         logging.error(f"Error enviando mensaje largo al chat {chat_id}: {e}")
 
 
+def _normalizar_informe_para_telegram_movil(texto: str) -> str:
+    """Adapta el informe para que se lea bien en Telegram móvil."""
+    if not texto:
+        return ""
+
+    # Evitar formatos que se rompen en pantallas pequeñas.
+    texto = texto.replace("```", "")
+    texto = re.sub(r"^#{1,6}\s*", "", texto, flags=re.MULTILINE)
+    texto = texto.replace("**", "").replace("__", "")
+
+    # Convertir viñetas markdown a un formato uniforme y simple.
+    texto = re.sub(r"^\s*[-*]\s+", "• ", texto, flags=re.MULTILINE)
+
+    # Quitar tablas markdown (quedan descuadradas en móvil) y dejarlas como líneas separadas.
+    lineas_limpias = []
+    for linea in texto.splitlines():
+        if "|" in linea:
+            partes = [p.strip() for p in linea.split("|") if p.strip()]
+            if not partes:
+                continue
+            if all(set(p) <= {":", "-"} for p in partes):
+                continue
+            linea = " • ".join(partes)
+        lineas_limpias.append(linea.rstrip())
+
+    texto = "\n".join(lineas_limpias)
+
+    # Normalizar saltos y espacios.
+    texto = re.sub(r"\n{3,}", "\n\n", texto)
+    texto = re.sub(r"[ \t]{2,}", " ", texto)
+
+    return texto.strip()
+
+
 def _buscar_contexto_mercados_diario(config: dict, query: str) -> str:
     """Consulta Tavily sin timeout explícito para no cortar informes largos."""
     api_key = config.get("tavily", {}).get("api_key")
@@ -555,13 +589,16 @@ async def generar_informe_studio_diario(client, config) -> str:
     3) Qué pasó en Nasdaq, IBEX y oro.
     4) Qué se espera para hoy (escenarios y catalizadores a vigilar).
 
-    FORMATO DE SALIDA:
+    FORMATO DE SALIDA (OPTIMIZADO PARA TELEGRAM MÓVIL):
     - Título: "📊 Studio Diario - Resumen de Mercados"
     - Sección 1: "Tu cartera ayer"
     - Sección 2: "Mercados: Nasdaq, IBEX y Oro"
     - Sección 3: "Claves para hoy"
     - Sección 4: "Plan rápido (3 acciones recomendadas)"
     - Estilo claro, sin relleno, y con viñetas.
+    - NO uses tablas, NO uses markdown complejo, NO uses bloques de código.
+    - Escribe frases cortas (máximo 1-2 líneas por viñeta en móvil).
+    - Deja una línea en blanco entre secciones para legibilidad.
     """
 
     respuesta = await asyncio.to_thread(
@@ -570,7 +607,8 @@ async def generar_informe_studio_diario(client, config) -> str:
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
     )
-    return respuesta.choices[0].message.content
+    contenido = respuesta.choices[0].message.content
+    return _normalizar_informe_para_telegram_movil(contenido)
 
 
 async def ejecutar_studio_diario_en_background(chat_id: int, context: ContextTypes.DEFAULT_TYPE, client, config):
