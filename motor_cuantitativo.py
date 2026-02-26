@@ -99,18 +99,16 @@ class AnalizadorTecnicoAlgoritmico:
         if len(precios) < 26:
             return {'señal': 'NEUTRAL', 'datos_insuficientes': True}
         
-        precios_arr = np.array(precios)
-        
-        # Calcular EMAs
-        ema_12 = AnalizadorTecnicoAlgoritmico._ema(precios_arr, 12)
-        ema_26 = AnalizadorTecnicoAlgoritmico._ema(precios_arr, 26)
-        
-        macd_line = ema_12 - ema_26
-        
-        # Signal line (EMA de 9 del MACD)
-        # Para simplificar, usamos el valor actual
-        signal_line = macd_line * 0.9  # Aproximación
-        
+        precios_arr = np.array(precios, dtype=float)
+
+        # Cálculo profesional: MACD como diferencia entre series EMA
+        ema_12_series = AnalizadorTecnicoAlgoritmico._ema_series(precios_arr, 12)
+        ema_26_series = AnalizadorTecnicoAlgoritmico._ema_series(precios_arr, 26)
+        macd_series = ema_12_series - ema_26_series
+        signal_series = AnalizadorTecnicoAlgoritmico._ema_series(macd_series, 9)
+
+        macd_line = float(macd_series[-1])
+        signal_line = float(signal_series[-1])
         histograma = macd_line - signal_line
         
         # Señales
@@ -362,6 +360,55 @@ class AnalizadorTecnicoAlgoritmico:
             'riesgo': riesgo,
             'accion': accion
         }
+
+    @staticmethod
+    def calcular_metricas_riesgo(precios: List[float]) -> Dict:
+        """
+        Capa cuantitativa institucional: VaR/CVaR, drawdown y ratios ajustados a riesgo.
+        """
+        if len(precios) < 30:
+            return {'datos_insuficientes': True}
+
+        precios_arr = np.array(precios, dtype=float)
+        returns = np.diff(precios_arr) / precios_arr[:-1]
+
+        if len(returns) < 2:
+            return {'datos_insuficientes': True}
+
+        mean_daily = float(np.mean(returns))
+        rf_daily = 0.02 / 252
+        excess_daily = returns - rf_daily
+
+        std_daily = float(np.std(returns))
+        downside = returns[returns < 0]
+        downside_std = float(np.std(downside)) if len(downside) > 1 else 0.0
+
+        sharpe = (mean_daily - rf_daily) / std_daily * np.sqrt(252) if std_daily > 0 else 0.0
+        sortino = (mean_daily - rf_daily) / downside_std * np.sqrt(252) if downside_std > 0 else 0.0
+
+        curva = np.cumprod(1 + returns)
+        max_curve = np.maximum.accumulate(curva)
+        drawdowns = (curva - max_curve) / max_curve
+        max_drawdown = float(np.min(drawdowns)) * 100
+
+        anual_return = ((1 + mean_daily) ** 252 - 1) * 100
+        calmar = anual_return / abs(max_drawdown) if max_drawdown < 0 else 0.0
+
+        var_95 = float(np.percentile(returns, 5)) * 100
+        cvar_95 = float(np.mean(returns[returns <= np.percentile(returns, 5)])) * 100
+
+        tracking_error = float(np.std(excess_daily)) * np.sqrt(252) * 100
+
+        return {
+            'sharpe': round(sharpe, 2),
+            'sortino': round(sortino, 2),
+            'calmar': round(calmar, 2),
+            'max_drawdown_pct': round(max_drawdown, 2),
+            'var_95_pct_dia': round(var_95, 2),
+            'cvar_95_pct_dia': round(cvar_95, 2),
+            'tracking_error_anual_pct': round(tracking_error, 2),
+            'retorno_anualizado_pct': round(anual_return, 2)
+        }
     
     @staticmethod
     def _ema(precios: np.ndarray, periodo: int) -> float:
@@ -376,6 +423,23 @@ class AnalizadorTecnicoAlgoritmico:
             ema = (float(precio) * multiplier) + (ema * (1 - multiplier))
         
         return ema
+
+    @staticmethod
+    def _ema_series(precios: np.ndarray, periodo: int) -> np.ndarray:
+        """Calcula toda la serie EMA para señales más estables."""
+        if len(precios) == 0:
+            return np.array([])
+        if len(precios) < periodo:
+            return np.full(len(precios), float(np.mean(precios)))
+
+        multiplier = 2 / (periodo + 1)
+        ema_values = np.zeros(len(precios), dtype=float)
+        ema_values[0] = float(precios[0])
+
+        for i in range(1, len(precios)):
+            ema_values[i] = (float(precios[i]) * multiplier) + (ema_values[i - 1] * (1 - multiplier))
+
+        return ema_values
 
 
 class BuscadorDatosWeb:

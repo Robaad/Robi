@@ -43,6 +43,20 @@ class EvaluadorProfesionalCartera:
         except Exception:
             return default
 
+    @staticmethod
+    def _normalizar_ponderaciones(ponderacion: Dict) -> Dict:
+        """Normaliza pesos de capas para mantener suma=1."""
+        if not isinstance(ponderacion, dict):
+            return {}
+
+        claves = ['tecnico', 'fundamental', 'consenso', 'sentimiento', 'estrategico']
+        valores = {k: max(0.0, EvaluadorProfesionalCartera._to_float(ponderacion.get(k), 0.0)) for k in claves}
+        total = sum(valores.values())
+        if total <= 0:
+            return {k: round(1 / len(claves), 3) for k in claves}
+        return {k: round(v / total, 3) for k, v in valores.items()}
+
+
     def _construir_contexto_estrategico(
         self,
         precio_compra: float,
@@ -60,13 +74,16 @@ class EvaluadorProfesionalCartera:
         deuda_patrimonio = self._to_float((metricas_fundamentales or {}).get('deuda_patrimonio'), 1)
         crecimiento_ingresos = self._to_float((metricas_fundamentales or {}).get('crecimiento_ingresos'), 0)
         score_sentimiento = self._to_float((sentimiento or {}).get('score'), 0)
+        met_riesgo = (analisis_tecnico or {}).get('metricas_riesgo', {})
+        sharpe = self._to_float((met_riesgo or {}).get('sharpe'), 0)
+        max_dd = abs(self._to_float((met_riesgo or {}).get('max_drawdown_pct'), 0))
         precio_obj = self._to_float((consenso_analistas or {}).get('precio_objetivo_medio'), precio_actual)
 
         gap_consenso = ((precio_obj / precio_actual) - 1) * 100 if precio_actual > 0 else 0
 
         score_riesgo = min(
             100,
-            max(0, (volatilidad * 1.1) + (deuda_patrimonio * 14) + (max(0, per - 25) * 1.2) - (crecimiento_ingresos * 0.7))
+            max(0, (volatilidad * 1.0) + (deuda_patrimonio * 14) + (max(0, per - 25) * 1.1) + (max_dd * 0.35) - (crecimiento_ingresos * 0.7) - (max(0, sharpe) * 6))
         )
         conviccion = min(100, max(0, 55 + (gap_consenso * 0.35) + (score_sentimiento * 18) - (score_riesgo * 0.3)))
 
@@ -100,7 +117,9 @@ class EvaluadorProfesionalCartera:
             'perfil_asimetria': perfil,
             'gap_consenso_pct': round(gap_consenso, 2),
             'limite_exposicion': exposure_cap,
-            'peg': peg
+            'peg': peg,
+            'sharpe': round(sharpe, 2),
+            'max_drawdown_pct': round(max_dd, 2)
         }
 
     def _ajustar_recomendacion_realista(self, recomendacion: Dict, contexto_estrategico: Dict, precio_actual: float) -> Dict:
@@ -285,7 +304,8 @@ class EvaluadorProfesionalCartera:
                     'bollinger': AnalizadorTecnicoAlgoritmico.calcular_bollinger(precios_historicos),
                     'fibonacci': AnalizadorTecnicoAlgoritmico.calcular_niveles_fibonacci(precios_historicos),
                     'tendencia': AnalizadorTecnicoAlgoritmico.detectar_tendencia(precios_historicos),
-                    'volatilidad': AnalizadorTecnicoAlgoritmico.calcular_volatilidad(precios_historicos)
+                    'volatilidad': AnalizadorTecnicoAlgoritmico.calcular_volatilidad(precios_historicos),
+                    'metricas_riesgo': AnalizadorTecnicoAlgoritmico.calcular_metricas_riesgo(precios_historicos)
                 }
             else:
                 logging.warning(f"  ⚠️ Datos técnicos insuficientes para {ticker}")
@@ -294,32 +314,37 @@ class EvaluadorProfesionalCartera:
             logging.error(f"  ❌ Error en análisis técnico: {e}")
             analisis_tecnico = None
         
-        logging.info(f"  💰 Capa 2: Análisis Fundamental de {ticker}...")
-        
-        # CAPA 2: ANÁLISIS FUNDAMENTAL
+        logging.info(f"  💰👔📰 Capas 2-4 en paralelo para {ticker}...")
+
+        metricas_fundamentales = {}
+        consenso_analistas = {}
+        sentimiento = {'sentimiento': 'Neutral', 'score': 0}
+
         try:
-            metricas_fundamentales = await self.buscador.obtener_metricas_fundamentales(ticker, nombre)
+            resultados_capas = await asyncio.gather(
+                self.buscador.obtener_metricas_fundamentales(ticker, nombre),
+                self.buscador.obtener_consenso_analistas(ticker, nombre),
+                self.buscador.analizar_sentimiento_noticias(ticker, nombre),
+                return_exceptions=True
+            )
+
+            if not isinstance(resultados_capas[0], Exception):
+                metricas_fundamentales = resultados_capas[0] or {}
+            else:
+                logging.error(f"  ❌ Error en análisis fundamental: {resultados_capas[0]}")
+
+            if not isinstance(resultados_capas[1], Exception):
+                consenso_analistas = resultados_capas[1] or {}
+            else:
+                logging.error(f"  ❌ Error obteniendo consenso: {resultados_capas[1]}")
+
+            if not isinstance(resultados_capas[2], Exception):
+                sentimiento = resultados_capas[2] or {'sentimiento': 'Neutral', 'score': 0}
+            else:
+                logging.error(f"  ❌ Error en sentimiento: {resultados_capas[2]}")
+
         except Exception as e:
-            logging.error(f"  ❌ Error en análisis fundamental: {e}")
-            metricas_fundamentales = {}
-        
-        logging.info(f"  👔 Capa 3: Consenso de Analistas de {ticker}...")
-        
-        # CAPA 3: CONSENSO DE ANALISTAS
-        try:
-            consenso_analistas = await self.buscador.obtener_consenso_analistas(ticker, nombre)
-        except Exception as e:
-            logging.error(f"  ❌ Error obteniendo consenso: {e}")
-            consenso_analistas = {}
-        
-        logging.info(f"  📰 Capa 4: Análisis de Sentimiento de {ticker}...")
-        
-        # CAPA 4: ANÁLISIS DE SENTIMIENTO
-        try:
-            sentimiento = await self.buscador.analizar_sentimiento_noticias(ticker, nombre)
-        except Exception as e:
-            logging.error(f"  ❌ Error en sentimiento: {e}")
-            sentimiento = {'sentimiento': 'Neutral', 'score': 0}
+            logging.error(f"  ❌ Error ejecutando capas paralelas: {e}")
         
         logging.info(f"  🧮 Capa 5: Síntesis y Recomendación Final de {ticker}...")
         
@@ -520,6 +545,7 @@ Sé riguroso, concreto y sin marketing. Esta recomendación afecta dinero real.
             
             import json
             recomendacion = json.loads(response.choices[0].message.content)
+            recomendacion['ponderacion'] = self._normalizar_ponderaciones(recomendacion.get('ponderacion', {}))
             recomendacion = self._ajustar_recomendacion_realista(recomendacion, contexto_estrategico, precio_actual)
             
             logging.info(f"  ✅ Recomendación: {recomendacion.get('accion')} (Confianza: {recomendacion.get('confianza')})")
