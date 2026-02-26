@@ -16,6 +16,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 import re
+import requests
 
 
 class AnalizadorTecnicoAlgoritmico:
@@ -457,6 +458,10 @@ class BuscadorDatosWeb:
         """
         Intenta obtener serie histórica de precios del ticker.
         """
+        precios_yahoo = await asyncio.to_thread(self._obtener_serie_precios_yahoo, ticker)
+        if len(precios_yahoo) >= 14:
+            return precios_yahoo
+
         fecha_hoy = datetime.now().strftime("%Y-%m-%d")
         
         query = f"{ticker} historical prices last 12 months data {fecha_hoy}"
@@ -488,8 +493,9 @@ Si no encuentras precios históricos, responde: NO_DISPONIBLE
             if "NO_DISPONIBLE" in texto:
                 return []
             
-            # Parsear precios
-            precios = [float(p.strip()) for p in texto.split(',') if p.strip().replace('.', '').isdigit()]
+            # Parsear precios (robusto ante markdown/listas/formatos mixtos)
+            candidatos = re.findall(r"\d+(?:\.\d+)?", texto.replace(',', '.'))
+            precios = [float(p) for p in candidatos]
             
             return precios if len(precios) >= 5 else []
         
@@ -501,6 +507,10 @@ Si no encuentras precios históricos, responde: NO_DISPONIBLE
         """
         Busca métricas fundamentales en múltiples fuentes.
         """
+        metricas_yahoo = await asyncio.to_thread(self._obtener_metricas_fundamentales_yahoo, ticker)
+        if metricas_yahoo:
+            return metricas_yahoo
+
         fecha_hoy = datetime.now().strftime("%d %B %Y")
         
         # Búsquedas específicas
@@ -561,6 +571,98 @@ Sé conservador. Si no estás seguro, usa null.
         except Exception as e:
             logging.error(f"Error extrayendo métricas: {e}")
             return {}
+
+    def _obtener_variantes_ticker(self, ticker: str) -> List[str]:
+        """Devuelve variantes para mejorar la resolución del ticker."""
+        base = (ticker or "").strip().upper()
+        if not base:
+            return []
+
+        variantes = [base]
+        if '.' not in base:
+            variantes.append(f"{base}.MC")
+        return variantes
+
+    def _obtener_serie_precios_yahoo(self, ticker: str) -> List[float]:
+        """Obtiene precios desde Yahoo Finance chart API pública."""
+        headers = {'User-Agent': 'Mozilla/5.0'}
+
+        for tk in self._obtener_variantes_ticker(ticker):
+            try:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{tk}?range=6mo&interval=1d"
+                resp = requests.get(url, timeout=8, headers=headers)
+                if resp.status_code != 200:
+                    continue
+
+                data = resp.json()
+                result = ((data.get('chart') or {}).get('result') or [{}])[0]
+                closes = (((result.get('indicators') or {}).get('quote') or [{}])[0].get('close') or [])
+                precios = [float(c) for c in closes if c is not None and c > 0]
+
+                if len(precios) >= 14:
+                    return precios
+            except Exception:
+                continue
+
+        return []
+
+    def _obtener_metricas_fundamentales_yahoo(self, ticker: str) -> Dict:
+        """Obtiene fundamentales clave desde Yahoo Finance quoteSummary."""
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        modules = "defaultKeyStatistics,financialData,summaryDetail"
+
+        for tk in self._obtener_variantes_ticker(ticker):
+            try:
+                url = (
+                    f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{tk}"
+                    f"?modules={modules}"
+                )
+                resp = requests.get(url, timeout=8, headers=headers)
+                if resp.status_code != 200:
+                    continue
+
+                payload = resp.json()
+                result = ((payload.get('quoteSummary') or {}).get('result') or [{}])[0]
+                dks = result.get('defaultKeyStatistics') or {}
+                fd = result.get('financialData') or {}
+                sd = result.get('summaryDetail') or {}
+
+                def _raw(obj, key):
+                    val = (obj.get(key) or {})
+                    return val.get('raw') if isinstance(val, dict) else val
+
+                per = _raw(sd, 'trailingPE')
+                peg = _raw(dks, 'pegRatio')
+                roe = _raw(fd, 'returnOnEquity')
+                deuda = _raw(fd, 'debtToEquity')
+                margen = _raw(fd, 'operatingMargins')
+                crecimiento = _raw(fd, 'revenueGrowth')
+                fcf = _raw(fd, 'freeCashflow')
+                div_yield = _raw(sd, 'dividendYield')
+
+                metricas = {
+                    'per': round(per, 2) if isinstance(per, (int, float)) else None,
+                    'peg': round(peg, 2) if isinstance(peg, (int, float)) else None,
+                    'roe': round(roe * 100, 2) if isinstance(roe, (int, float)) else None,
+                    'deuda_patrimonio': round(deuda / 100, 2) if isinstance(deuda, (int, float)) else None,
+                    'margen_operativo': round(margen * 100, 2) if isinstance(margen, (int, float)) else None,
+                    'crecimiento_ingresos': round(crecimiento * 100, 2) if isinstance(crecimiento, (int, float)) else None,
+                    'fcf': 'positivo' if isinstance(fcf, (int, float)) and fcf > 0 else ('negativo' if isinstance(fcf, (int, float)) else None),
+                    'dividend_yield': round(div_yield * 100, 2) if isinstance(div_yield, (int, float)) else None,
+                    'per_sector': None,
+                    'valoracion': 'justa'
+                }
+
+                datos_disponibles = sum(
+                    1 for clave in ['per', 'peg', 'roe', 'deuda_patrimonio', 'margen_operativo', 'crecimiento_ingresos']
+                    if metricas.get(clave) is not None
+                )
+                if datos_disponibles >= 2:
+                    return metricas
+            except Exception:
+                continue
+
+        return {}
     
     async def obtener_consenso_analistas(self, ticker: str, nombre: str) -> Dict:
         """

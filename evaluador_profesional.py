@@ -684,7 +684,7 @@ def formatear_evaluacion_individual_profesional(ev: Dict) -> str:
     
     nombre = ev.get('nombre', 'Desconocido')
     ticker = ev.get('ticker', '')
-    datos = ev['datos_posicion']
+    datos = ev.get('datos_posicion', {})
     rec = ev['recomendacion']
     
     # Icono según acción
@@ -702,8 +702,13 @@ def formatear_evaluacion_individual_profesional(ev: Dict) -> str:
     
     # Posición actual
     msg += f"**Posición:**\n"
-    msg += f"• Entrada: {datos['precio_compra']:.2f}€ | Actual: {datos['precio_actual']:.2f}€\n"
-    msg += f"• P&L: {datos['ganancia_total']:,.2f}€ ({datos['pct_ganancia']:+.2f}%)\n\n"
+    precio_compra = _to_float_seguro(datos.get('precio_compra'))
+    precio_actual = _to_float_seguro(datos.get('precio_actual'))
+    ganancia_total = _to_float_seguro(datos.get('ganancia_total'))
+    pct_ganancia = _to_float_seguro(datos.get('pct_ganancia'))
+
+    msg += f"• Entrada: {precio_compra:.2f}€ | Actual: {precio_actual:.2f}€\n"
+    msg += f"• P&L: {ganancia_total:,.2f}€ ({pct_ganancia:+.2f}%)\n\n"
     
     # Recomendación principal
     msg += f"**Recomendación:** {rec.get('accion')} "
@@ -760,3 +765,13 @@ def formatear_evaluacion_individual_profesional(ev: Dict) -> str:
     msg += f"\n**Nivel de Riesgo:** {rec.get('riesgo', 'N/A')}\n"
     
     return msg
+
+
+def _to_float_seguro(valor, default=0.0):
+    """Convierte a float de forma segura para evitar romper el formateo."""
+    try:
+        if valor is None:
+            return float(default)
+        return float(valor)
+    except (TypeError, ValueError):
+        return float(default)
