@@ -15,6 +15,7 @@ from brain_v2 import (
     start_command,
 )
 from tools_system import init_calendar
+from generador_partitura import generar_partitura_command
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -70,6 +71,7 @@ def build_app():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler(["studio", "sudio"], studio_wrapper))
     app.add_handler(CommandHandler(["studiodiario"], studiodiario_wrapper))
+    app.add_handler(CommandHandler("generarpartitura", generar_partitura_command))
     app.add_handler(
         CommandHandler(
             ["oportunidades", "inversiones", "seguimiento", "evaluar", "ip", "deep"],

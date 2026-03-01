@@ -856,6 +856,7 @@ async def configurar_comandos(app):
         ("ip", "Consultar IP pública"),
         ("studio", "Generar informe/estudio"),
         ("studiodiario", "Informe diario de mercados"),
+        ("generarpartitura", "🎵 Generar lectura a vista para fagot"),
         ("start", "Reiniciar Robi")
     ]
     await app.bot.set_my_commands(comandos)
