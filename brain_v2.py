@@ -820,7 +820,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
         return
 
     # PARTITURA (generar XML + XLSX + PDF en background)
-    elif user_text.startswith("/generarpartitura"):
+    elif user_text.startswith("/generarPartitura"):
         await update.message.reply_text(
             "🎼 Generando partitura de fagot...\n"
             "Prepararé el resumen XLSX y te enviaré un PDF listo para imprimir."
@@ -851,7 +851,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
     # Resto de comandos: NO pasar por memoria/IA.
     # Si llega aquí, el comando no está soportado y no debemos responder con contexto previo.
     await update.message.reply_text(
-        "❓ Comando no reconocido. Usa /inversiones, /seguimiento, /evaluar, /oportunidades, /deep, /ip, /studio, /studiodiario o /generarpartitura."
+        "❓ Comando no reconocido. Usa /inversiones, /seguimiento, /evaluar, /oportunidades, /deep, /ip, /studio, /studiodiario o /generarPartitura."
     )
 
 
@@ -866,7 +866,7 @@ async def configurar_comandos(app):
         ("ip", "Consultar IP pública"),
         ("studio", "Generar informe/estudio"),
         ("studiodiario", "Informe diario de mercados"),
-        ("generarpartitura", "Genera partitura + XLSX + PDF"),
+        ("generarPartitura", "Genera partitura + XLSX + PDF"),
         ("start", "Reiniciar Robi")
     ]
     await app.bot.set_my_commands(comandos)
