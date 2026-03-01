@@ -72,7 +72,7 @@ def build_app():
     app.add_handler(CommandHandler(["studiodiario"], studiodiario_wrapper))
     app.add_handler(
         CommandHandler(
-            ["oportunidades", "inversiones", "seguimiento", "evaluar", "ip", "deep", "generarPartitura"],
+            ["oportunidades", "inversiones", "seguimiento", "evaluar", "ip", "deep", "generarpartitura"],
             command_wrapper,
         )
     )
