@@ -40,6 +40,7 @@ from tools_system import (
 )
 
 from evaluador_profesional import EvaluadorProfesionalCartera, formatear_informe_profesional
+from generador_partitura import generar_partitura_fagot
 
 # Estados de conversación
 esperando_empresa_deep = {}
@@ -818,6 +819,15 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
         await crear_studiodiario_command(update, context, client, config)
         return
 
+    # PARTITURA (generar XML + XLSX + PDF en background)
+    elif user_text.startswith("/generarpartitura"):
+        await update.message.reply_text(
+            "🎼 Generando partitura de fagot...\n"
+            "Prepararé el resumen XLSX y te enviaré un PDF listo para imprimir."
+        )
+        context.application.create_task(ejecutar_generacion_partitura(update))
+        return
+
     # OPORTUNIDADES (ejecutar en background)
     elif user_text.startswith("/oportunidades"):
         mercado = user_text.replace("/oportunidades", "").strip()
@@ -841,7 +851,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
     # Resto de comandos: NO pasar por memoria/IA.
     # Si llega aquí, el comando no está soportado y no debemos responder con contexto previo.
     await update.message.reply_text(
-        "❓ Comando no reconocido. Usa /inversiones, /seguimiento, /evaluar, /oportunidades, /deep, /ip, /studio o /studiodiario."
+        "❓ Comando no reconocido. Usa /inversiones, /seguimiento, /evaluar, /oportunidades, /deep, /ip, /studio, /studiodiario o /generarpartitura."
     )
 
 
@@ -856,10 +866,50 @@ async def configurar_comandos(app):
         ("ip", "Consultar IP pública"),
         ("studio", "Generar informe/estudio"),
         ("studiodiario", "Informe diario de mercados"),
+        ("generarpartitura", "Genera partitura + XLSX + PDF"),
         ("start", "Reiniciar Robi")
     ]
     await app.bot.set_my_commands(comandos)
 
+
+
+async def ejecutar_generacion_partitura(update: Update):
+    """Genera partitura de fagot y envía XLSX + PDF (o MusicXML si no hay conversor)."""
+    try:
+        resultado = await asyncio.to_thread(generar_partitura_fagot)
+
+        await update.message.reply_document(
+            document=open(resultado["xlsx"], "rb"),
+            filename=os.path.basename(resultado["xlsx"]),
+            caption="📊 Resumen de partitura en XLSX"
+        )
+
+        if resultado.get("pdf"):
+            await update.message.reply_document(
+                document=open(resultado["pdf"], "rb"),
+                filename=os.path.basename(resultado["pdf"]),
+                caption="🖨️ Partitura en PDF lista para imprimir"
+            )
+        else:
+            await update.message.reply_text(
+                "⚠️ No encontré MuseScore en el entorno para convertir a PDF. "
+                "Te envío MusicXML para impresión desde editor de partituras."
+            )
+            await update.message.reply_document(
+                document=open(resultado["xml"], "rb"),
+                filename=os.path.basename(resultado["xml"]),
+                caption="🎼 Partitura en MusicXML"
+            )
+
+        meta = resultado.get("meta", {})
+        await update.message.reply_text(
+            "✅ Partitura generada\n"
+            f"Tonalidad: {meta.get('Tonalidad')}\n"
+            f"Compás: {meta.get('Compas')} | Forma: {meta.get('Forma')}"
+        )
+    except Exception as e:
+        logging.exception("Error generando partitura")
+        await update.message.reply_text(f"❌ Error generando partitura: {e}")
 
 
 async def crear_studiodiario_command(update: Update, context: ContextTypes.DEFAULT_TYPE, client=None, config=None):
