@@ -3,6 +3,7 @@ import logging
 import yaml
 from mistralai import Mistral
 from telegram import BotCommand, BotCommandScopeChat
+from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from brain_v2 import (
@@ -42,6 +43,16 @@ def _comando_permitido(user_id: int, command_text: str) -> bool:
     return comando in permitidos
 
 
+
+
+def _usuario_en_allowed_users(chat_id: int) -> bool:
+    allowed_users = config.get("telegram", {}).get("allowed_users", [])
+    return chat_id in allowed_users
+
+
+async def _denegar_acceso(update):
+    await update.message.reply_text("⛔ No estás autorizado para usar Robi.")
+
 async def _denegar_comando(update):
     await update.message.reply_text(
         "❌ No tienes permiso para usar este comando.\n"
@@ -52,6 +63,9 @@ async def _denegar_comando(update):
 
 
 async def start_wrapper(update, context):
+    if not _usuario_en_allowed_users(update.effective_chat.id):
+        await _denegar_acceso(update)
+        return
     if not _comando_permitido(update.effective_user.id, "/start"):
         await _denegar_comando(update)
         return
@@ -67,6 +81,9 @@ async def voice_wrapper(update, context):
 
 
 async def command_wrapper(update, context):
+    if not _usuario_en_allowed_users(update.effective_chat.id):
+        await _denegar_acceso(update)
+        return
     if not _comando_permitido(update.effective_user.id, update.message.text):
         await _denegar_comando(update)
         return
@@ -74,6 +91,9 @@ async def command_wrapper(update, context):
 
 
 async def studio_wrapper(update, context):
+    if not _usuario_en_allowed_users(update.effective_chat.id):
+        await _denegar_acceso(update)
+        return
     if not _comando_permitido(update.effective_user.id, "/studio"):
         await _denegar_comando(update)
         return
@@ -81,6 +101,9 @@ async def studio_wrapper(update, context):
 
 
 async def studiodiario_wrapper(update, context):
+    if not _usuario_en_allowed_users(update.effective_chat.id):
+        await _denegar_acceso(update)
+        return
     if not _comando_permitido(update.effective_user.id, "/studiodiario"):
         await _denegar_comando(update)
         return
@@ -88,6 +111,9 @@ async def studiodiario_wrapper(update, context):
 
 
 async def generarpartitura_wrapper(update, context):
+    if not _usuario_en_allowed_users(update.effective_chat.id):
+        await _denegar_acceso(update)
+        return
     if not _comando_permitido(update.effective_user.id, "/generarpartitura"):
         await _denegar_comando(update)
         return
@@ -109,10 +135,15 @@ def build_app():
             BotCommand("ip", "Consultar IP pública"),
             BotCommand("studio", "Generar informe/estudio"),
         ]
-        await application.bot.set_my_commands(
-            comandos_restringidos,
-            scope=BotCommandScopeChat(chat_id=111111111),
-        )
+        try:
+            await application.bot.set_my_commands(
+                comandos_restringidos,
+                scope=BotCommandScopeChat(chat_id=111111111),
+            )
+        except BadRequest as e:
+            logging.warning(
+                "⚠️ No se pudo aplicar menú restringido para 111111111: %s", e
+            )
 
         programar_studio_diario(application, client, config)
         logging.info("✅ Menú de comandos configurado")
