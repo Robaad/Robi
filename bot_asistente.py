@@ -2,6 +2,7 @@ import logging
 
 import yaml
 from mistralai import Mistral
+from telegram import BotCommand, BotCommandScopeChat
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from brain_v2 import (
@@ -28,6 +29,26 @@ with open("config.yaml", "r", encoding="utf-8") as f:
 client = Mistral(api_key=config["mistral"]["api_key"])
 
 
+COMANDOS_PERMITIDOS_POR_USUARIO = {
+    111111111: {"/generarpartitura", "/ip", "/studio"},
+}
+
+
+def _comando_permitido(chat_id: int, command_text: str) -> bool:
+    permitidos = COMANDOS_PERMITIDOS_POR_USUARIO.get(chat_id)
+    if not permitidos:
+        return True
+    comando = (command_text or "").split()[0].lower()
+    return comando in permitidos
+
+
+async def _denegar_comando(update):
+    await update.message.reply_text(
+        "❌ No tienes permiso para usar este comando.\n"
+        "✅ Comandos disponibles para tu usuario: /generarpartitura, /ip y /studio."
+    )
+
+
 async def text_wrapper(update, context):
     await handle_text(update, context, client, config)
 
@@ -37,15 +58,31 @@ async def voice_wrapper(update, context):
 
 
 async def command_wrapper(update, context):
+    if not _comando_permitido(update.effective_chat.id, update.message.text):
+        await _denegar_comando(update)
+        return
     await handle_command(update, context, client, config)
 
 
 async def studio_wrapper(update, context):
+    if not _comando_permitido(update.effective_chat.id, "/studio"):
+        await _denegar_comando(update)
+        return
     await crear_studio_command(update, context, client, config)
 
 
 async def studiodiario_wrapper(update, context):
+    if not _comando_permitido(update.effective_chat.id, "/studiodiario"):
+        await _denegar_comando(update)
+        return
     await crear_studiodiario_command(update, context, client, config)
+
+
+async def generarpartitura_wrapper(update, context):
+    if not _comando_permitido(update.effective_chat.id, "/generarpartitura"):
+        await _denegar_comando(update)
+        return
+    await generar_partitura_command(update, context)
 
 
 def build_app():
@@ -57,8 +94,20 @@ def build_app():
 
     async def post_init(application):
         await configurar_comandos(application)
+
+        comandos_restringidos = [
+            BotCommand("generarpartitura", "🎵 Generar lectura a vista para fagot"),
+            BotCommand("ip", "Consultar IP pública"),
+            BotCommand("studio", "Generar informe/estudio"),
+        ]
+        await application.bot.set_my_commands(
+            comandos_restringidos,
+            scope=BotCommandScopeChat(chat_id=111111111),
+        )
+
         programar_studio_diario(application, client, config)
         logging.info("✅ Menú de comandos configurado")
+        logging.info("✅ Menú restringido aplicado para 111111111")
         logging.info("✅ Programación /studiodiario activa")
 
     app = (
@@ -71,7 +120,7 @@ def build_app():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler(["studio", "sudio"], studio_wrapper))
     app.add_handler(CommandHandler(["studiodiario"], studiodiario_wrapper))
-    app.add_handler(CommandHandler("generarpartitura", generar_partitura_command))
+    app.add_handler(CommandHandler("generarpartitura", generarpartitura_wrapper))
     app.add_handler(
         CommandHandler(
             ["oportunidades", "inversiones", "seguimiento", "evaluar", "ip", "deep"],
