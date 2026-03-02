@@ -7,6 +7,7 @@ from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from brain_v2 import (
+    ESPERANDO_PROMPT_STUDIO,
     configurar_comandos,
     crear_studio_command,
     crear_studiodiario_command,
@@ -30,24 +31,28 @@ with open("config.yaml", "r", encoding="utf-8") as f:
 client = Mistral(api_key=config["mistral"]["api_key"])
 
 
-COMANDOS_PERMITIDOS_POR_USUARIO = {
-    111111111: {"/generarpartitura", "/ip", "/studio"},
-}
+COMANDOS_RESTRINGIDOS_PERMITIDOS = {"/generarpartitura", "/ip", "/studio"}
 
 
-def _comando_permitido(user_id: int, command_text: str) -> bool:
-    permitidos = COMANDOS_PERMITIDOS_POR_USUARIO.get(user_id)
-    if not permitidos:
+def _comando_permitido(chat_id: int, command_text: str) -> bool:
+    if chat_id not in _allowed_restricted_users():
         return True
     comando = (command_text or "").split()[0].lower()
-    return comando in permitidos
+    return comando in COMANDOS_RESTRINGIDOS_PERMITIDOS
 
 
 
 
-def _usuario_en_allowed_users(chat_id: int) -> bool:
-    allowed_users = config.get("telegram", {}).get("allowed_users", [])
-    return chat_id in allowed_users
+def _allowed_users() -> list[int]:
+    return config.get("telegram", {}).get("allowed_users", [])
+
+
+def _allowed_restricted_users() -> list[int]:
+    return config.get("telegram", {}).get("allowed_restricted_users", [])
+
+
+def _usuario_autorizado(chat_id: int) -> bool:
+    return chat_id in _allowed_users() or chat_id in _allowed_restricted_users()
 
 
 async def _denegar_acceso(update):
@@ -63,58 +68,82 @@ async def _denegar_comando(update):
 
 
 async def start_wrapper(update, context):
-    if not _usuario_en_allowed_users(update.effective_chat.id):
+    chat_id = update.effective_chat.id
+    if not _usuario_autorizado(chat_id):
         await _denegar_acceso(update)
         return
-    if not _comando_permitido(update.effective_user.id, "/start"):
+    if not _comando_permitido(chat_id, "/start"):
         await _denegar_comando(update)
         return
     await start_command(update, context)
 
 
 async def text_wrapper(update, context):
+    chat_id = update.effective_chat.id
+    if not _usuario_autorizado(chat_id):
+        await _denegar_acceso(update)
+        return
+
+    user_id = update.effective_user.id
+    if chat_id in _allowed_restricted_users() and user_id not in ESPERANDO_PROMPT_STUDIO:
+        await _denegar_comando(update)
+        return
+
     await handle_text(update, context, client, config)
 
 
 async def voice_wrapper(update, context):
+    chat_id = update.effective_chat.id
+    if not _usuario_autorizado(chat_id):
+        await _denegar_acceso(update)
+        return
+
+    if chat_id in _allowed_restricted_users():
+        await _denegar_comando(update)
+        return
+
     await handle_voice(update, context, client, config)
 
 
 async def command_wrapper(update, context):
-    if not _usuario_en_allowed_users(update.effective_chat.id):
+    chat_id = update.effective_chat.id
+    if not _usuario_autorizado(chat_id):
         await _denegar_acceso(update)
         return
-    if not _comando_permitido(update.effective_user.id, update.message.text):
+    if not _comando_permitido(chat_id, update.message.text):
         await _denegar_comando(update)
         return
     await handle_command(update, context, client, config)
 
 
 async def studio_wrapper(update, context):
-    if not _usuario_en_allowed_users(update.effective_chat.id):
+    chat_id = update.effective_chat.id
+    if not _usuario_autorizado(chat_id):
         await _denegar_acceso(update)
         return
-    if not _comando_permitido(update.effective_user.id, "/studio"):
+    if not _comando_permitido(chat_id, "/studio"):
         await _denegar_comando(update)
         return
     await crear_studio_command(update, context, client, config)
 
 
 async def studiodiario_wrapper(update, context):
-    if not _usuario_en_allowed_users(update.effective_chat.id):
+    chat_id = update.effective_chat.id
+    if not _usuario_autorizado(chat_id):
         await _denegar_acceso(update)
         return
-    if not _comando_permitido(update.effective_user.id, "/studiodiario"):
+    if not _comando_permitido(chat_id, "/studiodiario"):
         await _denegar_comando(update)
         return
     await crear_studiodiario_command(update, context, client, config)
 
 
 async def generarpartitura_wrapper(update, context):
-    if not _usuario_en_allowed_users(update.effective_chat.id):
+    chat_id = update.effective_chat.id
+    if not _usuario_autorizado(chat_id):
         await _denegar_acceso(update)
         return
-    if not _comando_permitido(update.effective_user.id, "/generarpartitura"):
+    if not _comando_permitido(chat_id, "/generarpartitura"):
         await _denegar_comando(update)
         return
     await generar_partitura_command(update, context)
@@ -135,19 +164,20 @@ def build_app():
             BotCommand("ip", "Consultar IP pública"),
             BotCommand("studio", "Generar informe/estudio"),
         ]
-        try:
-            await application.bot.set_my_commands(
-                comandos_restringidos,
-                scope=BotCommandScopeChat(chat_id=111111111),
-            )
-        except BadRequest as e:
-            logging.warning(
-                "⚠️ No se pudo aplicar menú restringido para 111111111: %s", e
-            )
+        for chat_id in _allowed_restricted_users():
+            try:
+                await application.bot.set_my_commands(
+                    comandos_restringidos,
+                    scope=BotCommandScopeChat(chat_id=chat_id),
+                )
+            except BadRequest as e:
+                logging.warning(
+                    "⚠️ No se pudo aplicar menú restringido para un usuario restringido: %s", e
+                )
 
         programar_studio_diario(application, client, config)
         logging.info("✅ Menú de comandos configurado")
-        logging.info("✅ Menú restringido aplicado para 111111111")
+        logging.info("✅ Menú restringido aplicado para usuarios restringidos")
         logging.info("✅ Programación /studiodiario activa")
 
     app = (

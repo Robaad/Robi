@@ -134,6 +134,13 @@ def _seleccionar_opcion(texto: str, opciones: list) -> dict | None:
 MODELO_CONVERSACION = "mistral-small-latest"  # Para chat normal
 MODELO_GENERACION = "mistral-large-latest"    # Para contenido complejo
 
+
+def _chat_autorizado(config: dict, chat_id: int) -> bool:
+    telegram_cfg = (config or {}).get("telegram", {})
+    allowed_users = telegram_cfg.get("allowed_users", [])
+    allowed_restricted_users = telegram_cfg.get("allowed_restricted_users", [])
+    return chat_id in allowed_users or chat_id in allowed_restricted_users
+
 # Historial de conversaciones
 MEMORIA_PATH = os.getenv("ROBI_MEMORY_FILE", "robi_memoria.json")
 historiales = {}
@@ -230,8 +237,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, client
     """Handler principal de mensajes de texto."""
     
     # Control de acceso
-    allowed_users = config["telegram"].get("allowed_users", [])
-    if update.effective_chat.id not in allowed_users:
+    if not _chat_autorizado(config, update.effective_chat.id):
         logging.warning(f"Usuario no autorizado: {update.effective_chat.id}")
         return
     
@@ -436,8 +442,7 @@ async def procesar_comandos(texto_ai: str, client, config) -> str:
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, client, config):
     """Handler de mensajes de voz."""
     
-    allowed_users = config["telegram"].get("allowed_users", [])
-    if update.effective_chat.id not in allowed_users:
+    if not _chat_autorizado(config, update.effective_chat.id):
         return
     
     try:
@@ -742,8 +747,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
     
     user_text = update.message.text
     
-    allowed_users = config["telegram"].get("allowed_users", [])
-    if update.effective_chat.id not in allowed_users:
+    if not _chat_autorizado(config, update.effective_chat.id):
         logging.warning(f"Usuario no autorizado (comando): {update.effective_chat.id}")
         return
     
@@ -865,8 +869,7 @@ async def configurar_comandos(app):
 
 async def crear_studiodiario_command(update: Update, context: ContextTypes.DEFAULT_TYPE, client=None, config=None):
     """Comando /studiodiario - genera informe diario en background a demanda."""
-    allowed_users = (config or {}).get("telegram", {}).get("allowed_users", [])
-    if allowed_users and update.effective_chat.id not in allowed_users:
+    if not _chat_autorizado(config or {}, update.effective_chat.id):
         logging.warning(f"Usuario no autorizado (/studiodiario): {update.effective_chat.id}")
         return
 
