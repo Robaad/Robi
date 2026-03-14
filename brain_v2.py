@@ -565,52 +565,82 @@ def _buscar_contexto_mercados_diario(config: dict, query: str) -> str:
 
 
 async def generar_informe_studio_diario(client, config) -> str:
-    """Genera el informe diario de mercados y cartera (sin límite interno de tiempo)."""
+    """Genera el informe diario de mercados y cartera con búsquedas especializadas."""
     fecha_hoy = datetime.now(ZoneInfo("Europe/Madrid"))
+
+    # Guardia extra: nunca ejecutar en fin de semana aunque el job se dispare por error
+    if fecha_hoy.weekday() >= 5:
+        return "📅 Hoy es fin de semana — no hay sesión de mercados. ¡Hasta el lunes!"
+
     fecha_ayer = fecha_hoy - timedelta(days=1)
     resumen_cartera = await asyncio.to_thread(analizar_inversiones)
 
-    query = (
-        "latest market recap previous session Nasdaq Composite IBEX 35 gold spot XAUUSD "
-        "main drivers why markets moved analyst commentary macro events and what to watch today"
+    # Búsquedas separadas por área para dar contexto limpio al modelo
+    queries = {
+        "nasdaq": (
+            f"Nasdaq Composite performance {fecha_ayer.strftime('%B %d %Y')} "
+            "why did it move key movers analyst recap"
+        ),
+        "ibex": (
+            f"IBEX 35 resumen sesión {fecha_ayer.strftime('%d %B %Y')} "
+            "qué pasó bolsa española valores destacados"
+        ),
+        "oro_macro": (
+            f"gold XAUUSD price {fecha_ayer.strftime('%B %d %Y')} "
+            "macro drivers Fed rates dollar DXY"
+        ),
+        "hoy": (
+            f"market outlook today {fecha_hoy.strftime('%B %d %Y')} "
+            "earnings macro events data releases to watch"
+        ),
+    }
+
+    resultados_busqueda = {}
+    for clave, query in queries.items():
+        try:
+            resultados_busqueda[clave] = await asyncio.to_thread(
+                _buscar_contexto_mercados_diario, config, query
+            )
+        except Exception as e:
+            logging.warning(f"⚠️ Búsqueda '{clave}' fallida: {e}")
+            resultados_busqueda[clave] = "Sin datos disponibles."
+
+    prompt = (
+        "Eres un analista financiero senior. Redacta el informe diario de mercados para un inversor "
+        "particular español. Sé directo, concreto y útil. Sin relleno.\n\n"
+        f"FECHA HOY: {fecha_hoy.strftime('%A %d/%m/%Y')}\n"
+        f"SESIÓN ANALIZADA (AYER): {fecha_ayer.strftime('%A %d/%m/%Y')}\n\n"
+        f"━━━ CARTERA DEL USUARIO ━━━\n{resumen_cartera}\n\n"
+        f"━━━ NASDAQ (SESIÓN DE AYER) ━━━\n{resultados_busqueda['nasdaq']}\n\n"
+        f"━━━ IBEX 35 (SESIÓN DE AYER) ━━━\n{resultados_busqueda['ibex']}\n\n"
+        f"━━━ ORO Y MACRO ━━━\n{resultados_busqueda['oro_macro']}\n\n"
+        f"━━━ CLAVES PARA HOY ━━━\n{resultados_busqueda['hoy']}\n\n"
+        "ESTRUCTURA DEL INFORME (respeta exactamente este orden y títulos):\n\n"
+        f"📊 STUDIO DIARIO — {fecha_hoy.strftime('%d/%m/%Y')}\n\n"
+        "TU CARTERA AYER\n"
+        "• Para cada posición con movimiento relevante (>0.5%): nombre, variación aproximada, motivo. "
+        "Si no hay datos exactos, indícalo honestamente.\n\n"
+        "MERCADOS\n"
+        "• Nasdaq: cierre aproximado, tendencia, 2-3 valores que lo movieron y por qué.\n"
+        "• IBEX 35: cierre aproximado, sector dominante, valor destacado.\n"
+        "• Oro: nivel aproximado y causa principal del movimiento.\n\n"
+        "MACRO Y CATALIZADORES DE HOY\n"
+        "• Datos o eventos esperados hoy (Fed, empleo, resultados, etc.).\n"
+        "• 1-2 riesgos concretos a vigilar.\n\n"
+        "PLAN RÁPIDO\n"
+        "• 3 acciones específicas y accionables para hoy.\n\n"
+        "REGLAS DE FORMATO (críticas para Telegram móvil):\n"
+        "- Máximo 2 líneas por viñeta.\n"
+        "- Sin tablas, sin markdown complejo, sin bloques de código.\n"
+        "- Línea en blanco entre secciones.\n"
+        "- Si no tienes dato concreto, escribe 'sin datos confirmados' en lugar de inventar."
     )
-    contexto_mercados = await asyncio.to_thread(_buscar_contexto_mercados_diario, config, query)
-
-    prompt = f"""
-    Eres un analista financiero senior. Genera un informe diario en español, claro y accionable.
-
-    FECHA INFORME: {fecha_hoy.strftime('%Y-%m-%d')}
-    DÍA ANALIZADO (AYER): {fecha_ayer.strftime('%Y-%m-%d')}
-
-    DATOS DE CARTERA DEL USUARIO:
-    {resumen_cartera}
-
-    CONTEXTO DE MERCADOS (WEB):
-    {contexto_mercados}
-
-    OBJETIVO DEL INFORME (OBLIGATORIO):
-    1) Qué ocurrió ayer con sus acciones.
-    2) Por qué subieron o cayeron (motivos concretos si están disponibles).
-    3) Qué pasó en Nasdaq, IBEX y oro.
-    4) Qué se espera para hoy (escenarios y catalizadores a vigilar).
-
-    FORMATO DE SALIDA (OPTIMIZADO PARA TELEGRAM MÓVIL):
-    - Título: "📊 Studio Diario - Resumen de Mercados"
-    - Sección 1: "Tu cartera ayer"
-    - Sección 2: "Mercados: Nasdaq, IBEX y Oro"
-    - Sección 3: "Claves para hoy"
-    - Sección 4: "Plan rápido (3 acciones recomendadas)"
-    - Estilo claro, sin relleno, y con viñetas.
-    - NO uses tablas, NO uses markdown complejo, NO uses bloques de código.
-    - Escribe frases cortas (máximo 1-2 líneas por viñeta en móvil).
-    - Deja una línea en blanco entre secciones para legibilidad.
-    """
 
     respuesta = await asyncio.to_thread(
         client.chat.complete,
         model=MODELO_GENERACION,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
+        temperature=0.15,
     )
     contenido = respuesta.choices[0].message.content
     return _normalizar_informe_para_telegram_movil(contenido)
@@ -670,7 +700,7 @@ def programar_studio_diario(app, client, config):
     app.job_queue.run_daily(
         studio_diario_programado_callback,
         time=hora_objetivo,
-        days=(0, 1, 2, 3, 4),
+        days=(1, 2, 3, 4, 5),  # cron: 0=domingo → 1=lunes, 5=viernes
         name="studio_diario_weekdays",
         data={"chat_id": chat_id, "client": client, "config": config},
     )

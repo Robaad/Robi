@@ -37,7 +37,9 @@ COMANDOS_RESTRINGIDOS_PERMITIDOS = {"/generarpartitura", "/ip", "/studio"}
 def _comando_permitido(chat_id: int, command_text: str) -> bool:
     if chat_id not in _allowed_restricted_users():
         return True
-    comando = (command_text or "").split()[0].lower()
+    if not command_text:
+        return False
+    comando = command_text.split()[0].lower().split("@")[0]  # maneja @botname
     return comando in COMANDOS_RESTRINGIDOS_PERMITIDOS
 
 
@@ -83,12 +85,6 @@ async def text_wrapper(update, context):
     if not _usuario_autorizado(chat_id):
         await _denegar_acceso(update)
         return
-
-    user_id = update.effective_user.id
-    if chat_id in _allowed_restricted_users() and user_id not in ESPERANDO_PROMPT_STUDIO:
-        await _denegar_comando(update)
-        return
-
     await handle_text(update, context, client, config)
 
 
@@ -97,11 +93,6 @@ async def voice_wrapper(update, context):
     if not _usuario_autorizado(chat_id):
         await _denegar_acceso(update)
         return
-
-    if chat_id in _allowed_restricted_users():
-        await _denegar_comando(update)
-        return
-
     await handle_voice(update, context, client, config)
 
 
@@ -109,9 +100,6 @@ async def command_wrapper(update, context):
     chat_id = update.effective_chat.id
     if not _usuario_autorizado(chat_id):
         await _denegar_acceso(update)
-        return
-    if not _comando_permitido(chat_id, update.message.text):
-        await _denegar_comando(update)
         return
     await handle_command(update, context, client, config)
 
