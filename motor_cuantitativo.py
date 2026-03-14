@@ -523,6 +523,7 @@ Si no encuentras precios históricos, responde: NO_DISPONIBLE
             'dividendo': f"{ticker} dividend yield payout ratio dividend growth"
         }
         
+        # Búsquedas SECUENCIALES — buscar_internet ya aplica tavily_wait() internamente
         contexto = ""
         for categoria, query in queries.items():
             try:
@@ -563,8 +564,6 @@ Sé conservador. Si no estás seguro, usa null.
                 temperature=0.1,
                 response_format={"type": "json_object"}
             )
-            
-            import json
             metricas = json.loads(response.choices[0].message.content)
             return metricas
         
@@ -681,7 +680,7 @@ Sé conservador. Si no estás seguro, usa null.
             try:
                 resultado = await asyncio.to_thread(self.buscar, query)
                 contexto += f"\n{resultado}\n"
-            except:
+            except Exception:
                 continue
         
         # Extraer consenso con IA
@@ -713,8 +712,6 @@ Si no hay datos, usa null.
                 temperature=0.1,
                 response_format={"type": "json_object"}
             )
-            
-            import json
             consenso = json.loads(response.choices[0].message.content)
             return consenso
         
@@ -753,8 +750,6 @@ Responde en JSON:
                 temperature=0.2,
                 response_format={"type": "json_object"}
             )
-            
-            import json
             sentimiento = json.loads(response.choices[0].message.content)
             return sentimiento
         

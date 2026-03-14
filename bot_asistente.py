@@ -7,7 +7,6 @@ from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from brain_v2 import (
-    ESPERANDO_PROMPT_STUDIO,
     configurar_comandos,
     crear_studio_command,
     crear_studiodiario_command,
@@ -181,7 +180,11 @@ def build_app():
     app.add_handler(CommandHandler("generarpartitura", generarpartitura_wrapper))
     app.add_handler(
         CommandHandler(
-            ["oportunidades", "inversiones", "seguimiento", "evaluar", "ip", "deep"],
+            [
+                "oportunidades", "inversiones", "seguimiento", "evaluar",
+                "ip", "deep", "noticias", "resumen_semanal", "resumensemanal",
+                "calendario",
+            ],
             command_wrapper,
         )
     )

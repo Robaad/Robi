@@ -8,6 +8,8 @@ para generar recomendaciones de inversión institucionales.
 import pandas as pd
 import logging
 import asyncio
+import json
+import traceback
 from datetime import datetime
 from typing import Dict, List
 from motor_cuantitativo import (
@@ -165,69 +167,68 @@ class EvaluadorProfesionalCartera:
     
     async def evaluar_cartera_completa(self, ruta_excel: str) -> Dict:
         """
-        Evalúa todas las posiciones con análisis multi-capa.
+        Evalúa todas las posiciones con análisis multi-capa en paralelo (máx 3 simultáneas).
         """
         try:
             logging.info("📊 Iniciando evaluación profesional de cartera...")
-            
-            # Leer Excel
+
             df = await asyncio.to_thread(pd.read_excel, ruta_excel, sheet_name='Operaciones')
             activas = df[df.iloc[:, 8].isna()].copy()
-            
+
             if activas.empty:
-                return {
-                    'success': False,
-                    'mensaje': "No hay inversiones activas para evaluar."
-                }
-            
+                return {'success': False, 'mensaje': "No hay inversiones activas para evaluar."}
+
             fecha_hoy = datetime.now().strftime("%d de %B de %Y")
+            # Semaphore(1): evaluaciones secuenciales para respetar el rate limit de Tavily.
+            # Cada evaluación ya hace ~11 llamadas internas; en paralelo dispararían el límite.
+            semaforo = asyncio.Semaphore(1)
+
+            async def _evaluar_fila(fila):
+                async with semaforo:
+                    nombre = str(fila.iloc[0])
+                    precio_compra  = float(fila.iloc[5])  if pd.notna(fila.iloc[5])  else 0.0
+                    num_acciones   = float(fila.iloc[4])  if pd.notna(fila.iloc[4])  else 0.0
+                    valor_actual   = float(fila.iloc[9])  if pd.notna(fila.iloc[9])  else 0.0
+                    ganancia_total = float(fila.iloc[14]) if pd.notna(fila.iloc[14]) else 0.0
+                    pct_ganancia   = float(fila.iloc[15]) * 100 if pd.notna(fila.iloc[15]) else 0.0
+                    logging.info(f"🔍 Evaluando {nombre} con análisis multi-capa...")
+                    return await self._analizar_valor_completo(
+                        nombre=nombre,
+                        precio_compra=precio_compra,
+                        num_acciones=num_acciones,
+                        valor_actual=valor_actual,
+                        ganancia_total=ganancia_total,
+                        pct_ganancia=pct_ganancia,
+                        fecha=fecha_hoy,
+                    )
+
+            resultados = await asyncio.gather(
+                *[_evaluar_fila(activas.iloc[i]) for i in range(len(activas))],
+                return_exceptions=True,
+            )
+
             evaluaciones = []
-            
-            for i in range(len(activas)):
-                fila = activas.iloc[i]
-                
-                nombre = str(fila.iloc[0])           # Columna A
-                precio_compra = float(fila.iloc[5]) if pd.notna(fila.iloc[5]) else 0   # Columna F
-                num_acciones = float(fila.iloc[4]) if pd.notna(fila.iloc[4]) else 0    # Columna E
-                valor_actual = float(fila.iloc[9]) if pd.notna(fila.iloc[9]) else 0    # Columna J
-                ganancia_total = float(fila.iloc[14]) if pd.notna(fila.iloc[14]) else 0 # Columna O
-                pct_ganancia = float(fila.iloc[15]) * 100 if pd.notna(fila.iloc[15]) else 0  # Columna P
-                
-                logging.info(f"🔍 Evaluando {nombre} con análisis multi-capa...")
-                
-                # Análisis COMPLETO del valor
-                evaluacion = await self._analizar_valor_completo(
-                    nombre=nombre,
-                    precio_compra=precio_compra,
-                    num_acciones=num_acciones,
-                    valor_actual=valor_actual,
-                    ganancia_total=ganancia_total,
-                    pct_ganancia=pct_ganancia,
-                    fecha=fecha_hoy
-                )
-                
-                evaluaciones.append(evaluacion)
-            
-            # Generar resumen ejecutivo
+            for r in resultados:
+                if isinstance(r, Exception):
+                    logging.error(f"❌ Error en evaluación de posición: {r}")
+                else:
+                    evaluaciones.append(r)
+
             resumen = self._generar_resumen_ejecutivo(evaluaciones)
-            
+
             return {
                 'success': True,
                 'fecha': fecha_hoy,
                 'total_posiciones': len(evaluaciones),
                 'resumen': resumen,
                 'evaluaciones': evaluaciones,
-                'metodologia': 'Análisis Multi-Capa: Técnico + Fundamental + Consenso + Sentimiento + Capa Estratégica'
+                'metodologia': 'Análisis Multi-Capa: Técnico + Fundamental + Consenso + Sentimiento + Capa Estratégica',
             }
-        
+
         except Exception as e:
             logging.error(f"Error en evaluación profesional: {e}")
-            import traceback
             traceback.print_exc()
-            return {
-                'success': False,
-                'mensaje': f"Error: {str(e)}"
-            }
+            return {'success': False, 'mensaje': f"Error: {str(e)}"}
 
     async def evaluar_valor_unico(self, valor: str) -> Dict:
         """
@@ -263,7 +264,6 @@ class EvaluadorProfesionalCartera:
             }
         except Exception as e:
             logging.error(f"Error evaluando valor único: {e}")
-            import traceback
             traceback.print_exc()
             return {
                 'success': False,
@@ -542,8 +542,6 @@ Sé riguroso, concreto y sin marketing. Esta recomendación afecta dinero real.
                 temperature=0.15,  # Baja temperatura para decisiones conservadoras
                 response_format={"type": "json_object"}
             )
-            
-            import json
             recomendacion = json.loads(response.choices[0].message.content)
             recomendacion['ponderacion'] = self._normalizar_ponderaciones(recomendacion.get('ponderacion', {}))
             recomendacion = self._ajustar_recomendacion_realista(recomendacion, contexto_estrategico, precio_actual)

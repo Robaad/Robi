@@ -10,10 +10,10 @@ Este módulo gestiona la generación de contenido complejo usando:
 
 import logging
 import asyncio
+import json
 from datetime import datetime
 from typing import Dict, List, Optional
 import re
-import json
 
 class ContentEngine:
     """Motor de generación de contenido con templates especializados."""
@@ -63,7 +63,6 @@ class ContentEngine:
                 except Exception as e:
                     if "429" in str(e) or "rate_limit" in str(e).lower():
                         if intento < max_intentos - 1:
-                            import asyncio
                             espera = 10 * (intento + 1)
                             logging.warning(f"Rate limit alcanzado. Reintentando en {espera}s...")
                             await asyncio.sleep(espera)
@@ -96,7 +95,6 @@ class ContentEngine:
                         break
                     except Exception as e:
                         if "429" in str(e) and intento == 0:
-                            import asyncio
                             await asyncio.sleep(10)
                         else:
                             logging.warning(f"No se pudo refinar sección {i}, usando original")
@@ -524,7 +522,6 @@ Sin introducciones ni explicaciones.
             # Buscamos el bloque [GRAFICO_DATA]
             match = re.search(r"\[GRAFICO_DATA\]\s*(\{.*?\})\s*\[/GRAFICO_DATA\]", texto, re.DOTALL)
             if match:
-                import json
                 # Limpiamos posibles espacios o saltos de línea raros
                 json_str = match.group(1).strip()
                 return json.loads(json_str)

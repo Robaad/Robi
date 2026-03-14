@@ -23,28 +23,47 @@ from datetime import time
 from docx import Document
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
-from mistralai import Mistral
-
 # Importar motores especializados
-from content_engine import ContentEngine, AnalisisFinanciero
+from content_engine import ContentEngine
 
 # Importar herramientas existentes
 from tools_finance import (
     analizar_inversiones,
     buscar_oportunidades_inversion,
-    obtener_lista_seguimiento
+    obtener_lista_seguimiento,
+    generar_resumen_semanal,
+    noticias_valor_rapido,
 )
 from tools_system import (
-    crear_evento_calendar, control_openhab, 
-    obtener_ip_publica, buscar_internet, modelo_whisper, exportar_a_word_premium
+    crear_evento_calendar, control_openhab,
+    obtener_ip_publica, buscar_internet, modelo_whisper,
+    leer_eventos_calendar, tavily_wait,
 )
 
 from evaluador_profesional import EvaluadorProfesionalCartera, formatear_informe_profesional
 
-# Estados de conversación
-esperando_empresa_deep = {}
-esperando_mercado_oportunidades = {}
-ESPERANDO_PROMPT_STUDIO = {}
+# Estados de conversación con TTL de 10 minutos
+_ESTADO_TTL = 600  # segundos
+
+def _estado_activo(estados: dict, user_id) -> bool:
+    """Devuelve True si el estado existe y no ha expirado."""
+    ts = estados.get(user_id)
+    if ts is None:
+        return False
+    if (datetime.now(ZoneInfo("Europe/Madrid")).timestamp() - ts) > _ESTADO_TTL:
+        estados.pop(user_id, None)
+        return False
+    return True
+
+def _set_estado(estados: dict, user_id):
+    estados[user_id] = datetime.now(ZoneInfo("Europe/Madrid")).timestamp()
+
+def _clear_estado(estados: dict, user_id):
+    estados.pop(user_id, None)
+
+esperando_empresa_deep: dict = {}         # chat_id -> timestamp
+esperando_mercado_oportunidades: dict = {} # chat_id -> timestamp
+ESPERANDO_PROMPT_STUDIO: dict = {}         # user_id -> timestamp
 
 STUDIO_TIPOS = [
     {
@@ -179,7 +198,7 @@ def _guardar_memoria_persistente() -> None:
             os.makedirs(directorio, exist_ok=True)
 
         with open(MEMORIA_PATH, "w", encoding="utf-8") as memoria_file:
-            json.dump(historiales, memoria_file, ensure_ascii=False, indent=2)
+            json.dump(historiales, memoria_file, ensure_ascii=False)
     except Exception as e:
         logging.warning(f"⚠️ No se pudo guardar memoria persistente: {e}")
 
@@ -189,7 +208,7 @@ historiales = _cargar_memoria_persistente()
 
 def generar_prompt_sistema():
     """Genera el prompt del sistema con fecha actualizada."""
-    hoy = datetime.now(ZoneInfo("Europe/Madrid"))
+    hoy = datetime.now()
     fecha_str = hoy.strftime("%Y-%m-%d")
     dia_semana = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][hoy.weekday()]
     
@@ -223,6 +242,9 @@ IMPORTANTE: Calcula fechas relativas desde {fecha_str}
 
 5️⃣ UTILIDADES
 - IP pública: CONSULTAR: 'IP'
+- Leer calendario: CALENDAR_LEER: 'semana' o CALENDAR_LEER: 'YYYY-MM-DD'
+- Recordatorio: RECORDATORIO: 'mensaje', 'minutos'
+  Ejemplo: RECORDATORIO: 'Revisar el mercado', '30'
 
 === REGLAS CRÍTICAS ===
 - Responde de forma CONCISA y DIRECTA
@@ -245,7 +267,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, client
     user_id = update.effective_chat.id
     
     # Revisar si está esperando input para Studio
-    if user_id in ESPERANDO_PROMPT_STUDIO:
+    if _estado_activo(ESPERANDO_PROMPT_STUDIO, user_id):
         # Recuperar client y config del context.user_data
         client_studio = context.user_data.get('client', client)
         config_studio = context.user_data.get('config', config)
@@ -253,8 +275,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, client
         return
     
     # Revisar si está esperando input para Deep Research
-    if user_id in esperando_empresa_deep and esperando_empresa_deep[user_id]:
-        esperando_empresa_deep[user_id] = False
+    if _estado_activo(esperando_empresa_deep, user_id):
+        _clear_estado(esperando_empresa_deep, user_id)
         await update.message.reply_text(
             f"🚀 Evaluando {user_text.upper()} con análisis profesional...\n\n"
             "Esto llevará unos minutos. Te aviso cuando termine."
@@ -263,8 +285,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, client
         return
     
     # Revisar si está esperando mercado para oportunidades
-    if user_id in esperando_mercado_oportunidades and esperando_mercado_oportunidades[user_id]:
-        esperando_mercado_oportunidades[user_id] = False
+    if _estado_activo(esperando_mercado_oportunidades, user_id):
+        _clear_estado(esperando_mercado_oportunidades, user_id)
         await lanzar_escaner_oportunidades(update, user_text, client, config)
         return
     
@@ -308,8 +330,7 @@ async def handle_message_logic(update, context, user_text, client, config, retor
     
     # Añadir mensaje del usuario
     historiales[user_id].append({"role": "user", "content": user_text})
-    _guardar_memoria_persistente()
-    
+
     # Recortar historial (mantener último 10 + sistema)
     if len(historiales[user_id]) > 11:
         historiales[user_id] = [historiales[user_id][0]] + historiales[user_id][-10:]
@@ -330,7 +351,11 @@ async def handle_message_logic(update, context, user_text, client, config, retor
         _guardar_memoria_persistente()
         
         # Procesar comandos
-        respuesta_final = await procesar_comandos(texto_ai, client, config)
+        respuesta_final = await procesar_comandos(
+            texto_ai, client, config,
+            context=context,
+            chat_id=int(user_id) if user_id != "SYSTEM_AGENT" else None,
+        )
         
         # Devolver o enviar
         if retorno_texto:
@@ -348,11 +373,21 @@ async def handle_message_logic(update, context, user_text, client, config, retor
             await update.message.reply_text(mensaje_error)
 
 
-async def procesar_comandos(texto_ai: str, client, config) -> str:
+async def _recordatorio_callback(context: ContextTypes.DEFAULT_TYPE):
+    """Job de APScheduler que envía el recordatorio al usuario."""
+    job_data = context.job.data or {}
+    chat_id = job_data.get("chat_id")
+    mensaje = job_data.get("mensaje", "Recordatorio")
+    if chat_id:
+        await context.bot.send_message(chat_id=chat_id, text=f"⏰ **Recordatorio:** {mensaje}")
+
+
+async def procesar_comandos(texto_ai: str, client, config,
+                            context=None, chat_id: int = None) -> str:
     """Procesa comandos detectados en la respuesta de la IA."""
-    
+
     respuesta = texto_ai
-    
+
     # BUSCAR
     if "BUSCAR:" in texto_ai:
         match = re.search(r"BUSCAR:\s*['\"](.+?)['\"]", texto_ai)
@@ -363,79 +398,117 @@ async def procesar_comandos(texto_ai: str, client, config) -> str:
                 buscar_internet, query, client, config, MODELO_GENERACION
             )
             respuesta = texto_ai.replace(match.group(0), resultado)
-    
+
     # ACCION (domótica)
     if "ACCION:" in texto_ai:
         match = re.search(r"ACCION:\s*['\"](.+?)['\"]\s*,\s*['\"](.+?)['\"]", texto_ai)
         if match:
             item, state = match.group(1), match.group(2)
             logging.info(f"🏠 Acción domótica: {item} -> {state}")
-            
             resultado = await asyncio.to_thread(control_openhab, item, state, config)
-            
             respuesta = texto_ai.replace(match.group(0), resultado)
-    
+
     # CALENDAR_CREAR
     if "CALENDAR_CREAR:" in texto_ai:
-        match = re.search(r"CALENDAR_CREAR:\s*['\"](.+?)['\"]\s*,\s*['\"](.+?)['\"]\s*,\s*['\"](.+?)['\"]", texto_ai)
+        match = re.search(
+            r"CALENDAR_CREAR:\s*['\"](.+?)['\"]\s*,\s*['\"](.+?)['\"]\s*,\s*['\"](.+?)['\"]",
+            texto_ai
+        )
         if match:
             titulo, fecha, hora = match.group(1), match.group(2), match.group(3)
             logging.info(f"📅 Creando evento: {titulo} - {fecha} {hora}")
             resultado = await asyncio.to_thread(crear_evento_calendar, titulo, fecha, hora)
             respuesta = texto_ai.replace(match.group(0), resultado)
-    
+
+    # CALENDAR_LEER
+    if "CALENDAR_LEER:" in texto_ai:
+        match = re.search(r"CALENDAR_LEER:\s*['\"](.+?)['\"]", texto_ai)
+        rango = match.group(1) if match else "semana"
+        logging.info(f"📅 Leyendo calendario: {rango}")
+        resultado = await asyncio.to_thread(leer_eventos_calendar, rango)
+        if match:
+            respuesta = texto_ai.replace(match.group(0), resultado)
+        else:
+            respuesta = resultado
+
     # CONSULTAR: INVERSIONES
-    if "CONSULTAR: 'INVERSIONES'" in texto_ai or "CONSULTAR: \"INVERSIONES\"" in texto_ai:
+    if "CONSULTAR: 'INVERSIONES'" in texto_ai or 'CONSULTAR: "INVERSIONES"' in texto_ai:
         logging.info("📊 Consultando inversiones...")
         resultado = await asyncio.to_thread(analizar_inversiones)
-        respuesta = texto_ai.replace("CONSULTAR: 'INVERSIONES'", resultado)
-        respuesta = respuesta.replace("CONSULTAR: \"INVERSIONES\"", resultado)
-    
+        respuesta = respuesta.replace("CONSULTAR: 'INVERSIONES'", resultado)
+        respuesta = respuesta.replace('CONSULTAR: "INVERSIONES"', resultado)
+
     # EVALUAR_CARTERA
     if "EVALUAR_CARTERA" in texto_ai:
-        logging.info("🔍 Ejecutando evaluación de cartera...")
-        # Nota: Esto se ejecuta síncronamente en el hilo de IA
-        # Para mejor UX, el usuario debería usar /evaluar directamente
-        from tools_finance import analizar_inversiones
-        
-        # Primero verificar que hay Excel
         ruta_excel = "/app/documentos/bolsav2.xlsx"
         if not os.path.exists(ruta_excel):
-            respuesta = texto_ai.replace("EVALUAR_CARTERA", 
-                "❌ No encuentro tu archivo de inversiones.")
+            sustitucion = "❌ No encuentro el archivo de inversiones."
         else:
-            respuesta = texto_ai.replace("EVALUAR_CARTERA",
-                "Para evaluar tu cartera completa, usa el comando /evaluar. "
-                "El análisis llevará unos minutos pero recibirás recomendaciones "
-                "detalladas para cada valor.")
-        
-        return respuesta
-
+            sustitucion = (
+                "Para evaluar tu cartera completa usa el comando /evaluar. "
+                "El análisis lleva 2-5 minutos y recibirás recomendaciones detalladas."
+            )
+        return texto_ai.replace("EVALUAR_CARTERA", sustitucion)
 
     # CONSULTAR: IP
-    if "CONSULTAR: 'IP'" in texto_ai or "CONSULTAR: \"IP\"" in texto_ai:
+    if "CONSULTAR: 'IP'" in texto_ai or 'CONSULTAR: "IP"' in texto_ai:
         logging.info("🌐 Obteniendo IP...")
         resultado = await asyncio.to_thread(obtener_ip_publica)
-        respuesta = texto_ai.replace("CONSULTAR: 'IP'", resultado)
-        respuesta = respuesta.replace("CONSULTAR: \"IP\"", resultado)
-    
-    # ANALIZAR_VALOR
+        respuesta = respuesta.replace("CONSULTAR: 'IP'", resultado)
+        respuesta = respuesta.replace('CONSULTAR: "IP"', resultado)
+
+    # ANALIZAR_VALOR — quick analysis (full deep → /deep TICKER)
     if "ANALIZAR_VALOR:" in texto_ai:
         match = re.search(r"ANALIZAR_VALOR:\s*['\"](.+?)['\"]", texto_ai)
         if match:
             valor = match.group(1)
-            logging.info(f"📈 Analizando valor: {valor}")
-            # Aquí podrías usar el nuevo AnalisisFinanciero si quieres
-            # Por ahora mantenemos la función original
+            logging.info(f"📈 Analizando valor (rápido): {valor}")
             from tools_finance import super_asesor_financiero
             resultado = await asyncio.to_thread(
                 super_asesor_financiero,
                 valor,
                 client,
-                lambda q: buscar_internet(q, client, config, MODELO_GENERACION)
+                lambda q: buscar_internet(q, client, config, MODELO_GENERACION),
             )
-            respuesta = texto_ai.replace(match.group(0), resultado)
-    
+            nota = f"\n\n💡 _Para análisis multi-capa completo usa /deep {valor.split()[0].upper()}_"
+            respuesta = texto_ai.replace(match.group(0), resultado + nota)
+
+    # DEEP_RESEARCH — redirigir al comando directo (requiere background task)
+    if "DEEP_RESEARCH:" in texto_ai:
+        match = re.search(r"DEEP_RESEARCH:\s*['\"](.+?)['\"]", texto_ai)
+        if match:
+            ticker = match.group(1).split()[0].upper()
+            respuesta = texto_ai.replace(
+                match.group(0),
+                f"🔍 Para análisis profundo completo usa: /deep {ticker}"
+            )
+
+    # BUSCAR_OPORTUNIDADES — redirigir al comando directo
+    if "BUSCAR_OPORTUNIDADES:" in texto_ai:
+        match = re.search(r"BUSCAR_OPORTUNIDADES:\s*['\"](.+?)['\"]", texto_ai)
+        if match:
+            mercado = match.group(1)
+            respuesta = texto_ai.replace(
+                match.group(0),
+                f"🔍 Para escanear oportunidades en {mercado.upper()} usa: /oportunidades {mercado}"
+            )
+
+    # RECORDATORIO
+    if "RECORDATORIO:" in texto_ai and context and chat_id:
+        match = re.search(r"RECORDATORIO:\s*['\"](.+?)['\"]\s*,\s*['\"](\d+)['\"]", texto_ai)
+        if match:
+            mensaje_rec = match.group(1)
+            minutos = int(match.group(2))
+            context.job_queue.run_once(
+                _recordatorio_callback,
+                when=minutos * 60,
+                data={"chat_id": chat_id, "mensaje": mensaje_rec},
+                name=f"reminder_{chat_id}_{minutos}",
+            )
+            confirmacion = f"✅ Te recuerdo en {minutos} minutos: «{mensaje_rec}»"
+            respuesta = texto_ai.replace(match.group(0), confirmacion)
+            logging.info(f"⏰ Recordatorio programado: {minutos}min — {mensaje_rec}")
+
     return respuesta
 
 
@@ -531,11 +604,12 @@ def _normalizar_informe_para_telegram_movil(texto: str) -> str:
 
 
 def _buscar_contexto_mercados_diario(config: dict, query: str) -> str:
-    """Consulta Tavily sin timeout explícito para no cortar informes largos."""
+    """Consulta Tavily respetando el rate limit del tier gratuito (1 req/seg)."""
     api_key = config.get("tavily", {}).get("api_key")
     if not api_key:
         return "⚠️ No hay API key de Tavily configurada."
 
+    tavily_wait()  # respetar 1 req/seg antes de cada llamada
     response = requests.post(
         "https://api.tavily.com/search",
         json={
@@ -564,56 +638,81 @@ def _buscar_contexto_mercados_diario(config: dict, query: str) -> str:
 
     return "\n\n".join(bloques) if bloques else "Sin resultados relevantes."
 
-
 async def generar_informe_studio_diario(client, config) -> str:
-    """Genera el informe diario de mercados y cartera (sin límite interno de tiempo)."""
+    """Genera el informe diario con 4 búsquedas especializadas secuenciales."""
     fecha_hoy = datetime.now(ZoneInfo("Europe/Madrid"))
-    # Los lunes la sesión anterior fue el viernes (3 días atrás)
+
+    if fecha_hoy.weekday() >= 5:
+        return "📅 Hoy es fin de semana — no hay sesión de mercados. ¡Hasta el lunes!"
+
     dias_atras = 3 if fecha_hoy.weekday() == 0 else 1
     fecha_ayer = fecha_hoy - timedelta(days=dias_atras)
     resumen_cartera = await asyncio.to_thread(analizar_inversiones)
 
-    query = (
-        "latest market recap previous session Nasdaq Composite IBEX 35 gold spot XAUUSD "
-        "main drivers why markets moved analyst commentary macro events and what to watch today"
+    # 4 búsquedas SECUENCIALES — el throttle en buscar_internet/_buscar_contexto
+    # garantiza ≥1.2s entre cada llamada a Tavily
+    queries = {
+        "nasdaq": (
+            f"Nasdaq Composite performance {fecha_ayer.strftime('%B %d %Y')} "
+            "why did it move key movers analyst recap"
+        ),
+        "ibex": (
+            f"IBEX 35 resumen sesión {fecha_ayer.strftime('%d %B %Y')} "
+            "qué pasó bolsa española valores destacados"
+        ),
+        "oro_macro": (
+            f"gold XAUUSD price {fecha_ayer.strftime('%B %d %Y')} "
+            "macro drivers Fed rates dollar DXY"
+        ),
+        "hoy": (
+            f"market outlook today {fecha_hoy.strftime('%B %d %Y')} "
+            "earnings macro events data releases to watch"
+        ),
+    }
+
+    resultados = {}
+    for clave, query in queries.items():
+        try:
+            resultados[clave] = await asyncio.to_thread(
+                _buscar_contexto_mercados_diario, config, query
+            )
+        except Exception as e:
+            logging.warning(f"⚠️ Búsqueda '{clave}' fallida: {e}")
+            resultados[clave] = "Sin datos disponibles."
+
+    prompt = (
+        "Eres un analista financiero senior. Redacta el informe diario de mercados para un inversor "
+        "particular español. Sé directo, concreto y útil. Sin relleno.\n\n"
+        f"FECHA HOY: {fecha_hoy.strftime('%A %d/%m/%Y')}\n"
+        f"SESIÓN ANALIZADA (AYER): {fecha_ayer.strftime('%A %d/%m/%Y')}\n\n"
+        f"━━━ CARTERA DEL USUARIO ━━━\n{resumen_cartera}\n\n"
+        f"━━━ NASDAQ (SESIÓN DE AYER) ━━━\n{resultados['nasdaq']}\n\n"
+        f"━━━ IBEX 35 (SESIÓN DE AYER) ━━━\n{resultados['ibex']}\n\n"
+        f"━━━ ORO Y MACRO ━━━\n{resultados['oro_macro']}\n\n"
+        f"━━━ CLAVES PARA HOY ━━━\n{resultados['hoy']}\n\n"
+        "ESTRUCTURA (respeta exactamente este orden):\n\n"
+        f"📊 STUDIO DIARIO — {fecha_hoy.strftime('%d/%m/%Y')}\n\n"
+        "TU CARTERA AYER\n"
+        "• Cada posición con movimiento >0.5%: nombre, variación, motivo. "
+        "Si no hay datos exactos, indícalo.\n\n"
+        "MERCADOS\n"
+        "• Nasdaq: cierre aproximado, tendencia, 2-3 valores clave.\n"
+        "• IBEX 35: cierre aproximado, sector dominante, valor destacado.\n"
+        "• Oro: nivel aproximado y causa principal.\n\n"
+        "MACRO Y CATALIZADORES DE HOY\n"
+        "• Eventos esperados hoy (Fed, empleo, resultados, etc.).\n"
+        "• 1-2 riesgos concretos.\n\n"
+        "PLAN RÁPIDO\n"
+        "• 3 acciones específicas y accionables para hoy.\n\n"
+        "REGLAS: máx 2 líneas por viñeta, sin tablas, sin markdown complejo, "
+        "línea en blanco entre secciones, escribe 'sin datos confirmados' si no tienes cifras."
     )
-    contexto_mercados = await asyncio.to_thread(_buscar_contexto_mercados_diario, config, query)
-
-    prompt = f"""
-    Eres un analista financiero senior. Genera un informe diario en español, claro y accionable.
-
-    FECHA INFORME: {fecha_hoy.strftime('%Y-%m-%d')}
-    DÍA ANALIZADO (AYER): {fecha_ayer.strftime('%Y-%m-%d')}
-
-    DATOS DE CARTERA DEL USUARIO:
-    {resumen_cartera}
-
-    CONTEXTO DE MERCADOS (WEB):
-    {contexto_mercados}
-
-    OBJETIVO DEL INFORME (OBLIGATORIO):
-    1) Qué ocurrió ayer con sus acciones.
-    2) Por qué subieron o cayeron (motivos concretos si están disponibles).
-    3) Qué pasó en Nasdaq, IBEX y oro.
-    4) Qué se espera para hoy (escenarios y catalizadores a vigilar).
-
-    FORMATO DE SALIDA (OPTIMIZADO PARA TELEGRAM MÓVIL):
-    - Título: "📊 Studio Diario - Resumen de Mercados"
-    - Sección 1: "Tu cartera ayer"
-    - Sección 2: "Mercados: Nasdaq, IBEX y Oro"
-    - Sección 3: "Claves para hoy"
-    - Sección 4: "Plan rápido (3 acciones recomendadas)"
-    - Estilo claro, sin relleno, y con viñetas.
-    - NO uses tablas, NO uses markdown complejo, NO uses bloques de código.
-    - Escribe frases cortas (máximo 1-2 líneas por viñeta en móvil).
-    - Deja una línea en blanco entre secciones para legibilidad.
-    """
 
     respuesta = await asyncio.to_thread(
         client.chat.complete,
         model=MODELO_GENERACION,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
+        temperature=0.15,
     )
     contenido = respuesta.choices[0].message.content
     return _normalizar_informe_para_telegram_movil(contenido)
@@ -656,28 +755,65 @@ async def studio_diario_programado_callback(context: ContextTypes.DEFAULT_TYPE):
     context.application.create_task(ejecutar_studio_diario_en_background(chat_id, context, client, config))
 
 
+async def resumen_semanal_programado_callback(context: ContextTypes.DEFAULT_TYPE):
+    """Job programado los viernes a las 18:00 — resumen semanal automático."""
+    job_data = context.job.data or {}
+    chat_id = job_data.get("chat_id")
+    client = job_data.get("client")
+    config = job_data.get("config")
+
+    if not chat_id or not client or not config:
+        logging.error("❌ Job Resumen Semanal sin parámetros obligatorios")
+        return
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="📊 Generando resumen semanal automático...",
+    )
+    try:
+        resultado = await generar_resumen_semanal(client, config)
+        await enviar_mensaje_largo_chat(context, chat_id, resultado)
+    except Exception as e:
+        logging.error(f"Error en resumen semanal automático: {e}")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ Error generando resumen semanal.\nDetalle: {str(e)}"
+        )
+
+
 def programar_studio_diario(app, client, config):
-    """Programa el informe diario de lunes a viernes a las 07:00 (Europe/Madrid)."""
+    """Programa el informe diario L-V a las 07:00 y el resumen semanal los viernes a las 18:00."""
     allowed_users = config.get("telegram", {}).get("allowed_users", [])
     if not allowed_users:
-        logging.warning("⚠️ No hay allowed_users para programar /studiodiario")
+        logging.warning("⚠️ No hay allowed_users para programar jobs")
         return
 
     chat_id = allowed_users[0]
     tz = ZoneInfo("Europe/Madrid")
-    hora_objetivo = time(hour=7, minute=0, tzinfo=tz)
 
+    # ── Informe diario: lunes a viernes (cron: 1=lun … 5=vie) ──
     for job in app.job_queue.get_jobs_by_name("studio_diario_weekdays"):
         job.schedule_removal()
-
     app.job_queue.run_daily(
         studio_diario_programado_callback,
-        time=hora_objetivo,
+        time=time(hour=7, minute=0, tzinfo=tz),
         days=(1, 2, 3, 4, 5),  # cron: 0=domingo → 1=lunes, 5=viernes
         name="studio_diario_weekdays",
         data={"chat_id": chat_id, "client": client, "config": config},
     )
     logging.info("✅ /studiodiario programado L-V 07:00 (Europe/Madrid)")
+
+    # ── Resumen semanal: viernes a las 18:00 ──
+    for job in app.job_queue.get_jobs_by_name("resumen_semanal_viernes"):
+        job.schedule_removal()
+    app.job_queue.run_daily(
+        resumen_semanal_programado_callback,
+        time=time(hour=18, minute=0, tzinfo=tz),
+        days=(5,),  # cron: 5=viernes
+        name="resumen_semanal_viernes",
+        data={"chat_id": chat_id, "client": client, "config": config},
+    )
+    logging.info("✅ /resumen_semanal programado viernes 18:00 (Europe/Madrid)")
 
 
 # ==================== COMANDOS ====================
@@ -759,7 +895,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
         valor = user_text.replace("/deep", "").strip()
         
         if not valor:
-            esperando_empresa_deep[update.effective_chat.id] = True
+            _set_estado(esperando_empresa_deep, update.effective_chat.id)
             await update.message.reply_text("🔍 ¿Qué empresa quieres investigar?")
             return
         
@@ -830,7 +966,7 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
         mercado = user_text.replace("/oportunidades", "").strip()
         
         if not mercado:
-            esperando_mercado_oportunidades[update.effective_chat.id] = True
+            _set_estado(esperando_mercado_oportunidades, update.effective_chat.id)
             botones = [['NASDAQ', 'IBEX'], ['CRYPTO', 'NYSE']]
             teclado = ReplyKeyboardMarkup(botones, one_time_keyboard=True, resize_keyboard=True)
             
@@ -845,11 +981,66 @@ async def handle_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cli
         context.application.create_task(lanzar_escaner_oportunidades(update, mercado, client, config))
         return
     
-    # Resto de comandos: NO pasar por memoria/IA.
-    # Si llega aquí, el comando no está soportado y no debemos responder con contexto previo.
+    # NOTICIAS de un valor
+    elif user_text.startswith("/noticias"):
+        ticker = user_text.replace("/noticias", "").strip()
+        if not ticker:
+            await update.message.reply_text(
+                "📰 Indica el ticker o nombre del valor.\n"
+                "Ejemplo: /noticias AAPL  o  /noticias Inditex"
+            )
+            return
+        await update.message.reply_text(f"📰 Buscando noticias de {ticker.upper()}...")
+        context.application.create_task(
+            _enviar_noticias_valor(update, ticker, client, config)
+        )
+        return
+
+    # RESUMEN SEMANAL
+    elif user_text.startswith("/resumen_semanal") or user_text.startswith("/resumensemanal"):
+        await update.message.reply_text(
+            "📊 Generando resumen semanal...\n"
+            "Tardará un momento. Te lo envío enseguida."
+        )
+        context.application.create_task(
+            _enviar_resumen_semanal(update, client, config)
+        )
+        return
+
+    # CALENDARIO — leer eventos
+    elif user_text.startswith("/calendario"):
+        rango = user_text.replace("/calendario", "").strip() or "semana"
+        logging.info(f"📅 Comando /calendario: {rango}")
+        resultado = await asyncio.to_thread(leer_eventos_calendar, rango)
+        await enviar_mensaje_largo(update, resultado)
+        return
+
+    # Resto de comandos no reconocidos
     await update.message.reply_text(
-        "❓ Comando no reconocido. Usa /inversiones, /seguimiento, /evaluar, /oportunidades, /deep, /ip, /studio o /studiodiario."
+        "❓ Comando no reconocido. Usa /inversiones, /seguimiento, /evaluar, "
+        "/oportunidades, /deep, /noticias, /resumen_semanal, /calendario, "
+        "/ip, /studio o /studiodiario."
     )
+
+
+async def _enviar_noticias_valor(update, ticker, client, config):
+    """Ejecuta noticias_valor_rapido en background y envía el resultado."""
+    try:
+        resultado = await noticias_valor_rapido(ticker, client, config)
+        await enviar_mensaje_largo(update, resultado)
+    except Exception as e:
+        logging.error(f"Error en /noticias {ticker}: {e}")
+        await update.message.reply_text(f"❌ Error buscando noticias de {ticker}: {e}")
+
+
+async def _enviar_resumen_semanal(update, client, config):
+    """Ejecuta generar_resumen_semanal en background y envía el resultado."""
+    try:
+        resultado = await generar_resumen_semanal(client, config)
+        await enviar_mensaje_largo(update, resultado)
+    except Exception as e:
+        logging.error(f"Error en /resumen_semanal: {e}")
+        await update.message.reply_text(f"❌ Error generando resumen semanal: {e}")
 
 
 async def configurar_comandos(app):
@@ -860,11 +1051,14 @@ async def configurar_comandos(app):
         ("evaluar", "Evaluar cartera y obtener recomendaciones"),
         ("oportunidades", "Buscar oportunidades de inversión"),
         ("deep", "Análisis profundo de valor"),
+        ("noticias", "📰 Noticias de un valor: /noticias AAPL"),
+        ("resumen_semanal", "📊 Resumen semanal de cartera y mercados"),
+        ("calendario", "📅 Ver eventos del calendario"),
         ("ip", "Consultar IP pública"),
         ("studio", "Generar informe/estudio"),
         ("studiodiario", "Informe diario de mercados"),
         ("generarpartitura", "🎵 Generar lectura a vista para fagot"),
-        ("start", "Reiniciar Robi")
+        ("start", "Reiniciar Robi"),
     ]
     await app.bot.set_my_commands(comandos)
 
@@ -895,7 +1089,7 @@ async def crear_studio_command(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data['client'] = client
     context.user_data['config'] = config
     
-    ESPERANDO_PROMPT_STUDIO[user_id] = True
+    _set_estado(ESPERANDO_PROMPT_STUDIO, user_id)
     context.user_data["studio_flow"] = {"step": "tipo", "data": {}}
 
     opciones_texto = "\n".join(
@@ -1013,10 +1207,8 @@ async def recibir_prompt_studio(update, context, client, config):
             )
             return True
 
-        if paso == "prompt":
-            prompt = user_text
-        else:
-            prompt = user_text
+        # Usar texto del usuario como prompt (paso=='prompt' u otro)
+        prompt = user_text
 
     datos = (studio_flow or {}).get("data", {})
     preferencias = [
@@ -1030,7 +1222,7 @@ async def recibir_prompt_studio(update, context, client, config):
     )
 
     context.user_data.pop("studio_flow", None)
-    del ESPERANDO_PROMPT_STUDIO[user_id]
+    _clear_estado(ESPERANDO_PROMPT_STUDIO, user_id)
 
     await update.message.reply_text(
         "🚀 **Agente Studio V2 iniciado**\n\n"
@@ -1056,6 +1248,160 @@ async def recibir_prompt_studio(update, context, client, config):
     return True
 
 
+
+# async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, client):
+#     """
+#     Agente de estudio mejorado usando ContentEngine con reporting de progreso.
+#     """
+#     try:
+#         # DETECCIÓN DE TESTS SIMPLES
+#         palabras_test = ['test', 'prueba', '2+2', 'hola mundo', 'ejemplo', 'demo']
+#         es_test = any(palabra in prompt_usuario.lower() for palabra in palabras_test)
+        
+#         if es_test and len(prompt_usuario.split()) < 10:
+#             await context.bot.send_message(
+#                 chat_id=chat_id,
+#                 text="🤖 **Detecto que esto es una prueba/test.**\n\n"
+#                      "Para un estudio académico completo, usa temas reales como:\n"
+#                      "• 'Programación didáctica de Bases de Datos en DAW'\n"
+#                      "• 'TFG sobre ciberseguridad en banca'\n"
+#                      "• 'Estudio sobre IA en medicina'\n\n"
+#                      "Si quieres continuar con este test de todos modos, "
+#                      "vuelve a enviarlo precedido de 'forzar:'\n"
+#                      "Ejemplo: `forzar: test 2+2`"
+#             )
+#             return
+        
+#         # Limpiar prefijo 'forzar:' si existe
+#         if prompt_usuario.lower().startswith('forzar:'):
+#             prompt_usuario = prompt_usuario[7:].strip()
+        
+#         # Parsear prompt para detectar tipo
+#         tipo = "general"
+#         if "programación didáctica" in prompt_usuario.lower() or "programacion didactica" in prompt_usuario.lower():
+#             tipo = "programacion_didactica"
+#         elif "tfg" in prompt_usuario.lower() or "tfm" in prompt_usuario.lower():
+#             tipo = "tfg"
+#         elif "investigación" in prompt_usuario.lower() or "investigacion" in prompt_usuario.lower():
+#             tipo = "investigacion"
+        
+#         # FASE 1: Generar estructura
+#         await context.bot.send_message(chat_id=chat_id, text="🧠 **Fase 1: Analizando tema y generando estructura...**")
+        
+#         from content_engine import ContentEngine
+#         engine = ContentEngine(client, modelo_avanzado=MODELO_GENERACION)
+
+#         # Generar solo la estructura primero
+#         # Si el prompt es muy largo y específico, debemos forzar al engine a no usar su template estándar. 
+#         if len(prompt_usuario.split()) > 150: # Contamos palabras, no caracteres
+#             prompt_bypass = f"""
+#             Genera un índice para este proyecto: {prompt_usuario}
+#             REGLAS:
+#             - Responde SOLO con los títulos de las secciones.
+#             - Máximo 10 secciones.
+#             - Una sección por línea.
+#             - No escribas introducciones ni despedidas.
+#             """
+#             res = client.chat.complete(
+#                 model=MODELO_GENERACION,
+#                 messages=[{"role": "user", "content": prompt_bypass}]
+#             )
+#             contenido_respuesta = res.choices[0].message.content
+            
+#             # Limpieza robusta:
+#             # 1. Dividimos por líneas
+#             lineas = contenido_respuesta.split('\n')
+#             secciones = []
+#             for l in lineas:
+#                 # Quitamos números, guiones y puntos al principio (ej: "1. Título" -> "Título")
+#                 limpia = re.sub(r'^[\d\.\-\s]+', '', l).strip()
+#                 if limpia and len(limpia) > 3: # Evitamos líneas vacías o basura
+#                     secciones.append(limpia)
+            
+#             estructura = {'secciones': secciones}
+#         else:
+#             estructura = await engine._generar_estructura(prompt_usuario, tipo, "universitario", "completo")
+        
+#         await context.bot.send_message(
+#             chat_id=chat_id, 
+#             text=f"📋 Estructura generada: {len(estructura['secciones'])} secciones\n\n"
+#                  f"**Fase 2: Redactando contenido profesional...**\n"
+#                  f"(Esto llevará varios minutos, te voy informando)"
+#         )
+        
+#         # Crear documento Word
+#         timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+#         safe_prompt = re.sub(r'[^a-zA-Z0-9]', '', prompt_usuario[:20])
+#         nombre_carpeta = f"STUDIO_{timestamp}_{safe_prompt}"
+#         ruta_base = f"/app/documentos/EstudiosRobi/{nombre_carpeta}"
+#         os.makedirs(ruta_base, exist_ok=True)
+#         ruta_archivo = os.path.join(ruta_base, "estudio_completo.docx")
+        
+#         # FASE 2: Desarrollar cada sección CON PROGRESO
+#         secciones_desarrolladas = []
+        
+#         for i, seccion in enumerate(estructura['secciones'], 1):
+#             await context.bot.send_message(chat_id=chat_id, text=f"✍️ **Sección {i}/{len(estructura['secciones'])}:** {seccion}")
+            
+#             # 1. Generar contenido (crudo con JSON)
+#             contenido_raw = await engine._desarrollar_seccion(
+#                 seccion=seccion,
+#                 tema_global=prompt_usuario,
+#                 contexto_previo=secciones_desarrolladas,
+#                 numero=i,
+#                 total=len(estructura['secciones'])
+#             )
+            
+#             # 1. EXTRAER EL GRÁFICO (IMPORTANTE: Antes de limpiar)
+#             # Buscamos si en ESTA sección la IA ha metido un JSON
+#             datos_v = engine._extraer_datos_visuales(contenido_raw)
+            
+#             # 2. LIMPIAR EL TEXTO
+#             # Eliminamos las etiquetas [GRAFICO_DATA] para que no salgan escritas en el Word
+#             contenido_final = engine._limpiar_formato(contenido_raw)
+
+#             # 3. REFINAR (opcional)
+#             if await engine._necesita_refinamiento(contenido_final):
+#                 contenido_final = await engine._refinar_contenido(contenido_final, seccion)
+
+#             # 4. GUARDAR EN LA LISTA CON SUS DATOS VISUALES
+#             secciones_desarrolladas.append({
+#                 'titulo': seccion,
+#                 'contenido': contenido_final,
+#                 'numero': i,
+#                 'datos_visuales': datos_v  # <-- Si hay JSON, aquí se guarda
+#             })
+            
+#             await context.bot.send_message(chat_id=chat_id, text=f"✅ Sección {i} lista.")
+#             if i < len(estructura['secciones']): await asyncio.sleep(8)
+
+#         # --- AQUÍ ESTÁ LA MAGIA ---
+        
+#         # 6. Preparar el objeto de datos para el exportador
+#         estudio_data = {
+#             'indice': [s['titulo'] for s in secciones_desarrolladas],
+#             'secciones': secciones_desarrolladas,
+#             'metadata': {
+#                 'tema': prompt_usuario,
+#                 'nivel': "universitario"
+#             }
+#         }
+
+#         # 7. Generar el Word Real con Gráficos
+#         exportar_a_word_premium(estudio_data, ruta_archivo)
+        
+#         # 8. Enviar el archivo final
+#         total_palabras = sum(len(s['contenido'].split()) for s in secciones_desarrolladas)
+#         with open(ruta_archivo, "rb") as doc_file:
+#             await context.bot.send_document(
+#                 chat_id=chat_id,
+#                 document=doc_file,
+#                 caption=f"🎉 **¡Estudio completado!**\n\n📊 Secciones: {len(secciones_desarrolladas)}\n📏 ~{total_palabras:,} palabras\n📈 Gráficos e imágenes incluidos."
+#             )
+
+#     except Exception as e:
+#         logging.error(f"Error en agente_estudio_mejorado: {e}")
+#         await context.bot.send_message(chat_id=chat_id, text=f"❌ Error: {str(e)}")
 
 def _resolver_tipo_estudio(prompt_usuario: str, preferencias: dict | None) -> str:
     tipo_id = (preferencias or {}).get("tipo", {}).get("id")

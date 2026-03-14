@@ -1,5 +1,7 @@
 import logging
 import platform
+import threading
+import time
 from pathlib import Path
 
 import requests
@@ -12,8 +14,27 @@ from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import matplotlib.pyplot as plt
-from datetime import datetime
+from datetime import datetime, timedelta
 
+
+# ── Tavily rate limiter (free tier: 1 req/seg) ────────────────────────────
+_TAVILY_MIN_INTERVAL = 1.2   # segundos mínimos entre llamadas (margen extra)
+_tavily_lock = threading.Lock()
+_tavily_last_call: float = 0.0
+
+
+def tavily_wait():
+    """Bloquea el hilo actual hasta que sea seguro llamar a Tavily.
+    Thread-safe: funciona tanto en el hilo principal como desde asyncio.to_thread."""
+    global _tavily_last_call
+    with _tavily_lock:
+        ahora = time.monotonic()
+        espera = _TAVILY_MIN_INTERVAL - (ahora - _tavily_last_call)
+        if espera > 0:
+            logging.debug(f"⏳ Tavily throttle: esperando {espera:.2f}s")
+            time.sleep(espera)
+        _tavily_last_call = time.monotonic()
+# ─────────────────────────────────────────────────────────────────────────
 
 if platform.system() == "Windows":
     WHISPER_CACHE = Path("./whisper_models")
@@ -110,8 +131,60 @@ def crear_evento_calendar(titulo, fecha, hora):
     except Exception as e:
         logging.error(f"Error creando evento: {e}")
         return f"❌ Error: {str(e)}"
+def leer_eventos_calendar(rango: str = "semana"):
+    """Lee eventos próximos del calendario.
+    rango: 'hoy', 'YYYY-MM-DD' para un día concreto, o 'semana' (default) para 7 días.
+    """
+    if not service:
+        return "❌ Calendar no inicializado"
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Madrid")
+        ahora = datetime.now(tz)
 
-# ---------------- DOMÓTICA ----------------
+        if rango == "hoy":
+            inicio = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+            fin = ahora.replace(hour=23, minute=59, second=59)
+            etiqueta = "hoy"
+        else:
+            try:
+                inicio = datetime.strptime(rango, "%Y-%m-%d").replace(tzinfo=tz)
+                fin = inicio + timedelta(days=1)
+                etiqueta = inicio.strftime("%d/%m/%Y")
+            except ValueError:
+                inicio = ahora
+                fin = ahora + timedelta(days=7)
+                etiqueta = f"próximos 7 días"
+
+        events_result = service.events().list(
+            calendarId="primary",
+            timeMin=inicio.isoformat(),
+            timeMax=fin.isoformat(),
+            maxResults=15,
+            singleEvents=True,
+            orderBy="startTime",
+        ).execute()
+        events = events_result.get("items", [])
+
+        if not events:
+            return f"📅 No hay eventos para {etiqueta}."
+
+        reporte = f"📅 Eventos — {etiqueta}:\n\n"
+        for ev in events:
+            start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
+            try:
+                dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).astimezone(tz)
+                hora_str = dt.strftime("%d/%m %H:%M")
+            except Exception:
+                hora_str = start_raw
+            reporte += f"• {hora_str} — {ev.get('summary', 'Sin título')}\n"
+        return reporte
+    except Exception as e:
+        logging.error(f"Error leyendo calendario: {e}")
+        return f"❌ Error leyendo calendario: {str(e)}"
+
+
+
 GRUPOS_DOMOTICA = {
     "banyo 0": ["Banyo1", "Espejo1"],
     "banyo 1": ["BanyoP1_Button1", "BanyoP1_Button2"],
@@ -166,9 +239,12 @@ def obtener_ip_publica():
 def buscar_internet(query: str, client, config, MODELO_LISTO):
     try:
         query_limpia = query.strip("'\" \n")
-        
+
         if not query_limpia:
             return "❌ La consulta de búsqueda está vacía."
+
+        # Respetar rate limit del tier gratuito de Tavily (1 req/seg)
+        tavily_wait()
 
         r = requests.post(
             "https://api.tavily.com/search",
@@ -239,21 +315,6 @@ def control_openhab(item: str, state: str, config):
     if errores:
         return f"⚠️ {item} → {state_final} (errores: {', '.join(errores)})"
     return f"✅ {item} → {state_final}"
-
-def normalizar_texto(texto: str) -> str:
-    """Normaliza variantes catalanas/valencianas."""
-    reemplazos = {
-        "salón": "salon",
-        "despatx": "despacho",
-        "cuina": "cocina",
-        "habitació": "dormitorio",
-        "habitación": "dormitorio",
-        "bany": "banyo"
-    }
-    for cat, esp in reemplazos.items():
-        texto = texto.replace(cat, esp)
-    return texto
-
 
 def exportar_a_word_premium(estudio_data: dict, nombre_archivo="Informe_Robi_Pro.docx"):
     """Convierte la salida del ContentEngine en un Word profesional con gráficos."""

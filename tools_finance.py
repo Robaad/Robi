@@ -3,6 +3,7 @@ import logging
 from mistralai import Mistral
 from datetime import datetime
 import os
+import json
 import asyncio
 import tempfile
 import shutil
@@ -34,7 +35,7 @@ def analizar_inversiones():
     
     mtime = os.path.getmtime(ruta_excel)
     size = os.path.getsize(ruta_excel)
-    logging.info(f"📁 Excel: mtime={mtime}, size={size} bytes")
+    logging.warning(f"📁 Excel: mtime={mtime}, size={size} bytes")
 
     # AÑADIR VALIDACIONES
     if not os.path.exists(ruta_excel):
@@ -42,9 +43,9 @@ def analizar_inversiones():
         return (
             "❌ No encuentro tu archivo de inversiones.\n\n"
             "Comprueba que:\n"
-            "• El volumen está montado en docker-compose.yml\n"
+            "• El volumen está montado\n"
             "• El archivo se llama 'bolsav2.xlsx'\n"
-            "• Está en la carpeta documentos del host"
+            "• Está en C:/Users/Robert/OneDrive/Documentos/"
         )
 
     try:
@@ -98,9 +99,7 @@ def analizar_inversiones():
         total_ganancia_acumulada = 0.0
 
         # --- BLOQUE DE INVERSIONES ---
-        for i in range(len(activas)):
-            fila = activas.iloc[i]
-            
+        for _, fila in activas.iterrows():
             nombre = fila.iloc[0]          # Columna A
             valor_dia = fila.iloc[9]       # Columna J
             pct_dia = fila.iloc[16] * 100  # Columna Q
@@ -249,7 +248,6 @@ async def buscar_oportunidades_inversion(mercado: str, client, buscar_internet, 
         )
         
         # Parsear respuesta
-        import json
         try:
             respuesta_json = res.choices[0].message.content
             # Limpiar posibles markdown
@@ -393,43 +391,136 @@ def super_asesor_financiero(nombre_valor: str, client, buscar_internet):
     except Exception as e:
         return f"❌ Error al acceder a los datos: {e}"
 
-def recomendar_valor(nombre_valor: str, client, buscar_internet):
-    """Robi busca el precio objetivo y da una recomendación basada en analistas."""
-    try:
-        query = f"target price consensus analyst {nombre_valor} 2026"
-        info_mercado = buscar_internet(query) 
-        
-        prompt = f"""
-        Eres un analista financiero experto. Basándote en esta información: "{info_mercado}"
-        Para el valor {nombre_valor}, resume:
-        1. Precio objetivo medio (Target Price).
-        2. Recomendación general (Comprar, Mantener, Vender).
-        3. Un motivo breve.
-        """
-        
-        respuesta = client.chat.complete(
-            model=MODELO_LISTO,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        return respuesta.choices[0].message.content
-    except Exception as e:
-        return f"Robi: No he podido calcular el valor objetivo ahora mismo. {str(e)}"
 
-def buscar_noticias_valor(nombre_valor: str, client, buscar_internet):
-    """Busca noticias financieras recientes para explicar movimientos de precio."""
-    query = f"últimas noticias financieras por qué sube o baja {nombre_valor} hoy 2026"
-    
-    contexto_noticias = buscar_internet(query)
-    
-    prompt = f"""
-    Basándote en estas noticias: "{contexto_noticias}"
-    Explica de forma breve y clara por qué {nombre_valor} se está moviendo hoy.
-    Si hay algún evento importante, menciónalo.
-    """
-    
-    response = client.chat.complete(
-        model=MODELO_LISTO,
-        messages=[{"role": "user", "content": prompt}]
+
+
+# ==================== NUEVAS FUNCIONALIDADES ====================
+
+async def generar_resumen_semanal(client, config) -> str:
+    """Genera un resumen del rendimiento semanal de la cartera + contexto de mercados."""
+    import requests as req
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    fecha_hoy = datetime.now(ZoneInfo("Europe/Madrid"))
+    lunes = fecha_hoy - timedelta(days=fecha_hoy.weekday())
+
+    resumen_cartera = await asyncio.to_thread(analizar_inversiones)
+
+    # Contexto semanal de mercados vía Tavily
+    api_key = (config.get("tavily") or {}).get("api_key")
+    contexto_mercados = "Sin datos de mercados disponibles."
+    if api_key:
+        try:
+            r = await asyncio.to_thread(
+                lambda: req.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": api_key,
+                        "query": (
+                            f"weekly stock market recap {fecha_hoy.strftime('%B %Y')} "
+                            "Nasdaq IBEX performance this week key events"
+                        ),
+                        "search_depth": "advanced",
+                        "max_results": 6,
+                        "include_answer": True,
+                    },
+                    timeout=30,
+                )
+            )
+            r.raise_for_status()
+            data = r.json()
+            bloques = []
+            if data.get("answer"):
+                bloques.append(data["answer"])
+            for item in data.get("results", []):
+                bloques.append(f"{item.get('title','')}: {item.get('content','')}")
+            contexto_mercados = "\n\n".join(bloques[:5])
+        except Exception as e:
+            logging.warning(f"⚠️ Búsqueda semanal fallida: {e}")
+
+    prompt = (
+        f"Eres un analista financiero. Genera el resumen semanal del "
+        f"{lunes.strftime('%d/%m')} al {fecha_hoy.strftime('%d/%m/%Y')}.\n\n"
+        f"CARTERA ACTUAL:\n{resumen_cartera}\n\n"
+        f"MERCADOS ESTA SEMANA:\n{contexto_mercados}\n\n"
+        "ESTRUCTURA (Telegram móvil):\n\n"
+        f"📊 RESUMEN SEMANAL — {lunes.strftime('%d/%m')} al {fecha_hoy.strftime('%d/%m/%Y')}\n\n"
+        "TU CARTERA ESTA SEMANA\n"
+        "• Mejor posición: nombre y rendimiento aprox.\n"
+        "• Peor posición: nombre y rendimiento aprox.\n"
+        "• Balance general de la semana.\n\n"
+        "MERCADOS\n"
+        "• Nasdaq esta semana: tendencia y % aprox.\n"
+        "• IBEX esta semana: tendencia y % aprox.\n"
+        "• Evento más relevante de la semana.\n\n"
+        "PRÓXIMA SEMANA\n"
+        "• 2-3 eventos o catalizadores a vigilar.\n"
+        "• Una recomendación concreta y accionable.\n\n"
+        "REGLAS: sin tablas, sin markdown complejo, viñetas cortas (máx 2 líneas), "
+        "línea en blanco entre secciones, no inventar cifras exactas."
     )
-    return response.choices[0].message.content
+
+    respuesta = await asyncio.to_thread(
+        client.chat.complete,
+        model="mistral-large-latest",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.15,
+    )
+    return respuesta.choices[0].message.content
+
+
+async def noticias_valor_rapido(ticker: str, client, config) -> str:
+    """Busca y sintetiza noticias recientes de un valor concreto."""
+    import requests as req
+    from datetime import datetime
+
+    fecha = datetime.now().strftime("%B %Y")
+    api_key = (config.get("tavily") or {}).get("api_key")
+
+    if not api_key:
+        return "❌ Tavily no configurado. Añade la api_key en config.yaml."
+
+    try:
+        r = await asyncio.to_thread(
+            lambda: req.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": api_key,
+                    "query": f"{ticker} noticias financieras esta semana resultados earnings {fecha}",
+                    "search_depth": "advanced",
+                    "max_results": 5,
+                    "include_answer": True,
+                },
+                timeout=20,
+            )
+        )
+        r.raise_for_status()
+        data = r.json()
+
+        bloques = []
+        if data.get("answer"):
+            bloques.append(f"Resumen: {data['answer']}")
+        for item in data.get("results", []):
+            bloques.append(f"• {item.get('title','')}: {item.get('content','')[:300]}")
+        contexto = "\n\n".join(bloques[:5]) or "Sin noticias recientes."
+
+    except Exception as e:
+        return f"❌ Error buscando noticias de {ticker}: {e}"
+
+    prompt = (
+        f"Sintetiza en 4-6 viñetas concisas las noticias más relevantes de {ticker.upper()} "
+        f"para un inversor particular. Usa formato Telegram (sin markdown complejo).\n\n"
+        f"INFORMACIÓN:\n{contexto}"
+    )
+
+    try:
+        res = await asyncio.to_thread(
+            client.chat.complete,
+            model="mistral-large-latest",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        return f"📰 Noticias {ticker.upper()}:\n\n{res.choices[0].message.content}"
+    except Exception as e:
+        return f"❌ Error sintetizando noticias: {e}"
