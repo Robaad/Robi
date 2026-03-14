@@ -34,7 +34,7 @@ def analizar_inversiones():
     
     mtime = os.path.getmtime(ruta_excel)
     size = os.path.getsize(ruta_excel)
-    logging.warning(f"📁 Excel: mtime={mtime}, size={size} bytes")
+    logging.info(f"📁 Excel: mtime={mtime}, size={size} bytes")
 
     # AÑADIR VALIDACIONES
     if not os.path.exists(ruta_excel):
@@ -42,9 +42,9 @@ def analizar_inversiones():
         return (
             "❌ No encuentro tu archivo de inversiones.\n\n"
             "Comprueba que:\n"
-            "• El volumen está montado\n"
+            "• El volumen está montado en docker-compose.yml\n"
             "• El archivo se llama 'bolsav2.xlsx'\n"
-            "• Está en C:/Users/Robert/OneDrive/Documentos/"
+            "• Está en la carpeta documentos del host"
         )
 
     try:

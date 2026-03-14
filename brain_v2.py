@@ -189,7 +189,7 @@ historiales = _cargar_memoria_persistente()
 
 def generar_prompt_sistema():
     """Genera el prompt del sistema con fecha actualizada."""
-    hoy = datetime.now()
+    hoy = datetime.now(ZoneInfo("Europe/Madrid"))
     fecha_str = hoy.strftime("%Y-%m-%d")
     dia_semana = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][hoy.weekday()]
     
@@ -545,6 +545,7 @@ def _buscar_contexto_mercados_diario(config: dict, query: str) -> str:
             "max_results": 8,
             "include_answer": True,
         },
+        timeout=30,
     )
     response.raise_for_status()
     data = response.json()
@@ -565,82 +566,54 @@ def _buscar_contexto_mercados_diario(config: dict, query: str) -> str:
 
 
 async def generar_informe_studio_diario(client, config) -> str:
-    """Genera el informe diario de mercados y cartera con búsquedas especializadas."""
+    """Genera el informe diario de mercados y cartera (sin límite interno de tiempo)."""
     fecha_hoy = datetime.now(ZoneInfo("Europe/Madrid"))
-
-    # Guardia extra: nunca ejecutar en fin de semana aunque el job se dispare por error
-    if fecha_hoy.weekday() >= 5:
-        return "📅 Hoy es fin de semana — no hay sesión de mercados. ¡Hasta el lunes!"
-
-    fecha_ayer = fecha_hoy - timedelta(days=1)
+    # Los lunes la sesión anterior fue el viernes (3 días atrás)
+    dias_atras = 3 if fecha_hoy.weekday() == 0 else 1
+    fecha_ayer = fecha_hoy - timedelta(days=dias_atras)
     resumen_cartera = await asyncio.to_thread(analizar_inversiones)
 
-    # Búsquedas separadas por área para dar contexto limpio al modelo
-    queries = {
-        "nasdaq": (
-            f"Nasdaq Composite performance {fecha_ayer.strftime('%B %d %Y')} "
-            "why did it move key movers analyst recap"
-        ),
-        "ibex": (
-            f"IBEX 35 resumen sesión {fecha_ayer.strftime('%d %B %Y')} "
-            "qué pasó bolsa española valores destacados"
-        ),
-        "oro_macro": (
-            f"gold XAUUSD price {fecha_ayer.strftime('%B %d %Y')} "
-            "macro drivers Fed rates dollar DXY"
-        ),
-        "hoy": (
-            f"market outlook today {fecha_hoy.strftime('%B %d %Y')} "
-            "earnings macro events data releases to watch"
-        ),
-    }
-
-    resultados_busqueda = {}
-    for clave, query in queries.items():
-        try:
-            resultados_busqueda[clave] = await asyncio.to_thread(
-                _buscar_contexto_mercados_diario, config, query
-            )
-        except Exception as e:
-            logging.warning(f"⚠️ Búsqueda '{clave}' fallida: {e}")
-            resultados_busqueda[clave] = "Sin datos disponibles."
-
-    prompt = (
-        "Eres un analista financiero senior. Redacta el informe diario de mercados para un inversor "
-        "particular español. Sé directo, concreto y útil. Sin relleno.\n\n"
-        f"FECHA HOY: {fecha_hoy.strftime('%A %d/%m/%Y')}\n"
-        f"SESIÓN ANALIZADA (AYER): {fecha_ayer.strftime('%A %d/%m/%Y')}\n\n"
-        f"━━━ CARTERA DEL USUARIO ━━━\n{resumen_cartera}\n\n"
-        f"━━━ NASDAQ (SESIÓN DE AYER) ━━━\n{resultados_busqueda['nasdaq']}\n\n"
-        f"━━━ IBEX 35 (SESIÓN DE AYER) ━━━\n{resultados_busqueda['ibex']}\n\n"
-        f"━━━ ORO Y MACRO ━━━\n{resultados_busqueda['oro_macro']}\n\n"
-        f"━━━ CLAVES PARA HOY ━━━\n{resultados_busqueda['hoy']}\n\n"
-        "ESTRUCTURA DEL INFORME (respeta exactamente este orden y títulos):\n\n"
-        f"📊 STUDIO DIARIO — {fecha_hoy.strftime('%d/%m/%Y')}\n\n"
-        "TU CARTERA AYER\n"
-        "• Para cada posición con movimiento relevante (>0.5%): nombre, variación aproximada, motivo. "
-        "Si no hay datos exactos, indícalo honestamente.\n\n"
-        "MERCADOS\n"
-        "• Nasdaq: cierre aproximado, tendencia, 2-3 valores que lo movieron y por qué.\n"
-        "• IBEX 35: cierre aproximado, sector dominante, valor destacado.\n"
-        "• Oro: nivel aproximado y causa principal del movimiento.\n\n"
-        "MACRO Y CATALIZADORES DE HOY\n"
-        "• Datos o eventos esperados hoy (Fed, empleo, resultados, etc.).\n"
-        "• 1-2 riesgos concretos a vigilar.\n\n"
-        "PLAN RÁPIDO\n"
-        "• 3 acciones específicas y accionables para hoy.\n\n"
-        "REGLAS DE FORMATO (críticas para Telegram móvil):\n"
-        "- Máximo 2 líneas por viñeta.\n"
-        "- Sin tablas, sin markdown complejo, sin bloques de código.\n"
-        "- Línea en blanco entre secciones.\n"
-        "- Si no tienes dato concreto, escribe 'sin datos confirmados' en lugar de inventar."
+    query = (
+        "latest market recap previous session Nasdaq Composite IBEX 35 gold spot XAUUSD "
+        "main drivers why markets moved analyst commentary macro events and what to watch today"
     )
+    contexto_mercados = await asyncio.to_thread(_buscar_contexto_mercados_diario, config, query)
+
+    prompt = f"""
+    Eres un analista financiero senior. Genera un informe diario en español, claro y accionable.
+
+    FECHA INFORME: {fecha_hoy.strftime('%Y-%m-%d')}
+    DÍA ANALIZADO (AYER): {fecha_ayer.strftime('%Y-%m-%d')}
+
+    DATOS DE CARTERA DEL USUARIO:
+    {resumen_cartera}
+
+    CONTEXTO DE MERCADOS (WEB):
+    {contexto_mercados}
+
+    OBJETIVO DEL INFORME (OBLIGATORIO):
+    1) Qué ocurrió ayer con sus acciones.
+    2) Por qué subieron o cayeron (motivos concretos si están disponibles).
+    3) Qué pasó en Nasdaq, IBEX y oro.
+    4) Qué se espera para hoy (escenarios y catalizadores a vigilar).
+
+    FORMATO DE SALIDA (OPTIMIZADO PARA TELEGRAM MÓVIL):
+    - Título: "📊 Studio Diario - Resumen de Mercados"
+    - Sección 1: "Tu cartera ayer"
+    - Sección 2: "Mercados: Nasdaq, IBEX y Oro"
+    - Sección 3: "Claves para hoy"
+    - Sección 4: "Plan rápido (3 acciones recomendadas)"
+    - Estilo claro, sin relleno, y con viñetas.
+    - NO uses tablas, NO uses markdown complejo, NO uses bloques de código.
+    - Escribe frases cortas (máximo 1-2 líneas por viñeta en móvil).
+    - Deja una línea en blanco entre secciones para legibilidad.
+    """
 
     respuesta = await asyncio.to_thread(
         client.chat.complete,
         model=MODELO_GENERACION,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.15,
+        temperature=0.2,
     )
     contenido = respuesta.choices[0].message.content
     return _normalizar_informe_para_telegram_movil(contenido)
@@ -1083,160 +1056,6 @@ async def recibir_prompt_studio(update, context, client, config):
     return True
 
 
-
-# async def agente_estudio_mejorado(prompt_usuario, chat_id, context, config, client):
-#     """
-#     Agente de estudio mejorado usando ContentEngine con reporting de progreso.
-#     """
-#     try:
-#         # DETECCIÓN DE TESTS SIMPLES
-#         palabras_test = ['test', 'prueba', '2+2', 'hola mundo', 'ejemplo', 'demo']
-#         es_test = any(palabra in prompt_usuario.lower() for palabra in palabras_test)
-        
-#         if es_test and len(prompt_usuario.split()) < 10:
-#             await context.bot.send_message(
-#                 chat_id=chat_id,
-#                 text="🤖 **Detecto que esto es una prueba/test.**\n\n"
-#                      "Para un estudio académico completo, usa temas reales como:\n"
-#                      "• 'Programación didáctica de Bases de Datos en DAW'\n"
-#                      "• 'TFG sobre ciberseguridad en banca'\n"
-#                      "• 'Estudio sobre IA en medicina'\n\n"
-#                      "Si quieres continuar con este test de todos modos, "
-#                      "vuelve a enviarlo precedido de 'forzar:'\n"
-#                      "Ejemplo: `forzar: test 2+2`"
-#             )
-#             return
-        
-#         # Limpiar prefijo 'forzar:' si existe
-#         if prompt_usuario.lower().startswith('forzar:'):
-#             prompt_usuario = prompt_usuario[7:].strip()
-        
-#         # Parsear prompt para detectar tipo
-#         tipo = "general"
-#         if "programación didáctica" in prompt_usuario.lower() or "programacion didactica" in prompt_usuario.lower():
-#             tipo = "programacion_didactica"
-#         elif "tfg" in prompt_usuario.lower() or "tfm" in prompt_usuario.lower():
-#             tipo = "tfg"
-#         elif "investigación" in prompt_usuario.lower() or "investigacion" in prompt_usuario.lower():
-#             tipo = "investigacion"
-        
-#         # FASE 1: Generar estructura
-#         await context.bot.send_message(chat_id=chat_id, text="🧠 **Fase 1: Analizando tema y generando estructura...**")
-        
-#         from content_engine import ContentEngine
-#         engine = ContentEngine(client, modelo_avanzado=MODELO_GENERACION)
-
-#         # Generar solo la estructura primero
-#         # Si el prompt es muy largo y específico, debemos forzar al engine a no usar su template estándar. 
-#         if len(prompt_usuario.split()) > 150: # Contamos palabras, no caracteres
-#             prompt_bypass = f"""
-#             Genera un índice para este proyecto: {prompt_usuario}
-#             REGLAS:
-#             - Responde SOLO con los títulos de las secciones.
-#             - Máximo 10 secciones.
-#             - Una sección por línea.
-#             - No escribas introducciones ni despedidas.
-#             """
-#             res = client.chat.complete(
-#                 model=MODELO_GENERACION,
-#                 messages=[{"role": "user", "content": prompt_bypass}]
-#             )
-#             contenido_respuesta = res.choices[0].message.content
-            
-#             # Limpieza robusta:
-#             # 1. Dividimos por líneas
-#             lineas = contenido_respuesta.split('\n')
-#             secciones = []
-#             for l in lineas:
-#                 # Quitamos números, guiones y puntos al principio (ej: "1. Título" -> "Título")
-#                 limpia = re.sub(r'^[\d\.\-\s]+', '', l).strip()
-#                 if limpia and len(limpia) > 3: # Evitamos líneas vacías o basura
-#                     secciones.append(limpia)
-            
-#             estructura = {'secciones': secciones}
-#         else:
-#             estructura = await engine._generar_estructura(prompt_usuario, tipo, "universitario", "completo")
-        
-#         await context.bot.send_message(
-#             chat_id=chat_id, 
-#             text=f"📋 Estructura generada: {len(estructura['secciones'])} secciones\n\n"
-#                  f"**Fase 2: Redactando contenido profesional...**\n"
-#                  f"(Esto llevará varios minutos, te voy informando)"
-#         )
-        
-#         # Crear documento Word
-#         timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-#         safe_prompt = re.sub(r'[^a-zA-Z0-9]', '', prompt_usuario[:20])
-#         nombre_carpeta = f"STUDIO_{timestamp}_{safe_prompt}"
-#         ruta_base = f"/app/documentos/EstudiosRobi/{nombre_carpeta}"
-#         os.makedirs(ruta_base, exist_ok=True)
-#         ruta_archivo = os.path.join(ruta_base, "estudio_completo.docx")
-        
-#         # FASE 2: Desarrollar cada sección CON PROGRESO
-#         secciones_desarrolladas = []
-        
-#         for i, seccion in enumerate(estructura['secciones'], 1):
-#             await context.bot.send_message(chat_id=chat_id, text=f"✍️ **Sección {i}/{len(estructura['secciones'])}:** {seccion}")
-            
-#             # 1. Generar contenido (crudo con JSON)
-#             contenido_raw = await engine._desarrollar_seccion(
-#                 seccion=seccion,
-#                 tema_global=prompt_usuario,
-#                 contexto_previo=secciones_desarrolladas,
-#                 numero=i,
-#                 total=len(estructura['secciones'])
-#             )
-            
-#             # 1. EXTRAER EL GRÁFICO (IMPORTANTE: Antes de limpiar)
-#             # Buscamos si en ESTA sección la IA ha metido un JSON
-#             datos_v = engine._extraer_datos_visuales(contenido_raw)
-            
-#             # 2. LIMPIAR EL TEXTO
-#             # Eliminamos las etiquetas [GRAFICO_DATA] para que no salgan escritas en el Word
-#             contenido_final = engine._limpiar_formato(contenido_raw)
-
-#             # 3. REFINAR (opcional)
-#             if await engine._necesita_refinamiento(contenido_final):
-#                 contenido_final = await engine._refinar_contenido(contenido_final, seccion)
-
-#             # 4. GUARDAR EN LA LISTA CON SUS DATOS VISUALES
-#             secciones_desarrolladas.append({
-#                 'titulo': seccion,
-#                 'contenido': contenido_final,
-#                 'numero': i,
-#                 'datos_visuales': datos_v  # <-- Si hay JSON, aquí se guarda
-#             })
-            
-#             await context.bot.send_message(chat_id=chat_id, text=f"✅ Sección {i} lista.")
-#             if i < len(estructura['secciones']): await asyncio.sleep(8)
-
-#         # --- AQUÍ ESTÁ LA MAGIA ---
-        
-#         # 6. Preparar el objeto de datos para el exportador
-#         estudio_data = {
-#             'indice': [s['titulo'] for s in secciones_desarrolladas],
-#             'secciones': secciones_desarrolladas,
-#             'metadata': {
-#                 'tema': prompt_usuario,
-#                 'nivel': "universitario"
-#             }
-#         }
-
-#         # 7. Generar el Word Real con Gráficos
-#         exportar_a_word_premium(estudio_data, ruta_archivo)
-        
-#         # 8. Enviar el archivo final
-#         total_palabras = sum(len(s['contenido'].split()) for s in secciones_desarrolladas)
-#         with open(ruta_archivo, "rb") as doc_file:
-#             await context.bot.send_document(
-#                 chat_id=chat_id,
-#                 document=doc_file,
-#                 caption=f"🎉 **¡Estudio completado!**\n\n📊 Secciones: {len(secciones_desarrolladas)}\n📏 ~{total_palabras:,} palabras\n📈 Gráficos e imágenes incluidos."
-#             )
-
-#     except Exception as e:
-#         logging.error(f"Error en agente_estudio_mejorado: {e}")
-#         await context.bot.send_message(chat_id=chat_id, text=f"❌ Error: {str(e)}")
 
 def _resolver_tipo_estudio(prompt_usuario: str, preferencias: dict | None) -> str:
     tipo_id = (preferencias or {}).get("tipo", {}).get("id")
