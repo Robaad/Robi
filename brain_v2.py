@@ -336,14 +336,54 @@ async def handle_message_logic(update, context, user_text, client, config, retor
     else:
         # Actualizar prompt del sistema con fecha actual
         historiales[user_id][0] = {"role": "system", "content": prompt_sistema}
-    
-    # Enrutado rápido para consultas de programaciones en PDF
-    user_text_norm = user_text.lower()
-    if any(k in user_text_norm for k in ["programacion", "programación", "resultados de aprendizaje", "entornos"]):
-        user_text = (
-            f"CONSULTAR_PROGRAMACIONES: '{user_text}'\n"
-            "Devuelve una respuesta final para el usuario usando esa consulta."
+
+    # ── Enrutado directo para consultas de programaciones didácticas ──────────
+    # Llama directamente a responder_pregunta_programaciones sin pasar por Mistral:
+    # más rápido, más fiable y sin coste de tokens de conversación.
+    _norm_query = user_text.lower()
+
+    # Palabras que indican que el usuario pregunta sobre sus programaciones
+    _keywords_accion = {
+        "programacion", "programación", "unidades de programacion",
+        "resultados de aprendizaje", "criterios de evaluacion",
+        "criterios de calificacion", "listado de temas", "temas de la asignatura",
+        "contenidos del modulo", "instrumentos de evaluacion",
+    }
+    # Nombres de módulos/asignaturas que gestiona este docente
+    _keywords_modulo = {
+        "entornos", "despliegue", "dwes", "daw", "asignatura", "modulo", "módulo",
+        "lenguajes de marcas", "bases de datos", "programacion web",
+    }
+
+    _es_consulta_pd = (
+        any(k in _norm_query for k in _keywords_accion)
+        or (
+            any(k in _norm_query for k in _keywords_modulo)
+            and any(k in _norm_query for k in {
+                "dame", "busca", "dime", "cuales", "cuáles", "lista", "listado",
+                "resultado", "criterio", "tema", "contenido", "unidad", "objetivos",
+                "competencias", "evaluacion", "calificacion", "ra", "ce", "up",
+            })
         )
+    )
+
+    if _es_consulta_pd:
+        logging.info("📚 Consulta directa de programaciones: %s", user_text[:80])
+        try:
+            resultado = await asyncio.to_thread(
+                responder_pregunta_programaciones,
+                user_text, client, MODELO_GENERACION
+            )
+        except Exception as e:
+            logging.error("Error en consulta de programaciones: %s", e)
+            resultado = f"❌ Error consultando las programaciones: {str(e)}"
+
+        if retorno_texto:
+            return resultado
+        else:
+            await enviar_mensaje_largo(update, resultado)
+        return
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Añadir mensaje del usuario
     historiales[user_id].append({"role": "user", "content": user_text})
