@@ -40,6 +40,7 @@ from tools_system import (
     obtener_ip_publica, buscar_internet, modelo_whisper,
     leer_eventos_calendar, tavily_wait,
 )
+from tools_programaciones import responder_pregunta_programaciones
 
 from evaluador_profesional import EvaluadorProfesionalCartera, formatear_informe_profesional
 
@@ -250,6 +251,10 @@ IMPORTANTE: Calcula fechas relativas desde {fecha_str}
 - Recordatorio: RECORDATORIO: 'mensaje', 'minutos'
   Ejemplo: RECORDATORIO: 'Revisar el mercado', '30'
 
+6️⃣ PROGRAMACIONES (PDF)
+- Consultar programaciones: CONSULTAR_PROGRAMACIONES: 'tu pregunta'
+  Ejemplo: CONSULTAR_PROGRAMACIONES: '¿Cuáles son los resultados de aprendizaje de Entornos?'
+
 === REGLAS CRÍTICAS ===
 - Responde de forma CONCISA y DIRECTA
 - NO uses comandos para preguntas que puedes responder tú
@@ -332,6 +337,14 @@ async def handle_message_logic(update, context, user_text, client, config, retor
         # Actualizar prompt del sistema con fecha actual
         historiales[user_id][0] = {"role": "system", "content": prompt_sistema}
     
+    # Enrutado rápido para consultas de programaciones en PDF
+    user_text_norm = user_text.lower()
+    if any(k in user_text_norm for k in ["programacion", "programación", "resultados de aprendizaje", "entornos"]):
+        user_text = (
+            f"CONSULTAR_PROGRAMACIONES: '{user_text}'\n"
+            "Devuelve una respuesta final para el usuario usando esa consulta."
+        )
+
     # Añadir mensaje del usuario
     historiales[user_id].append({"role": "user", "content": user_text})
 
@@ -434,6 +447,19 @@ async def procesar_comandos(texto_ai: str, client, config,
             respuesta = texto_ai.replace(match.group(0), resultado)
         else:
             respuesta = resultado
+
+
+
+    # CONSULTAR_PROGRAMACIONES
+    if "CONSULTAR_PROGRAMACIONES:" in texto_ai:
+        match = re.search(r"CONSULTAR_PROGRAMACIONES:\s*['\"](.+?)['\"]", texto_ai)
+        if match:
+            pregunta = match.group(1)
+            logging.info(f"📚 Consultando programaciones: {pregunta}")
+            resultado = await asyncio.to_thread(
+                responder_pregunta_programaciones, pregunta, client, MODELO_GENERACION
+            )
+            respuesta = respuesta.replace(match.group(0), resultado)
 
     # CONSULTAR: INVERSIONES
     if "CONSULTAR: 'INVERSIONES'" in texto_ai or 'CONSULTAR: "INVERSIONES"' in texto_ai:
