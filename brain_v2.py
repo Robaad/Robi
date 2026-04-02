@@ -31,6 +31,7 @@ from tools_finance import (
     analizar_inversiones,
     buscar_oportunidades_inversion,
     obtener_lista_seguimiento,
+    obtener_cartera_estructurada,
     generar_resumen_semanal,
     noticias_valor_rapido,
 )
@@ -226,6 +227,9 @@ Ejemplo: BUSCAR: 'noticias tecnología IA'
 Formato: ACCION: 'dispositivo', 'ON'/'OFF'
 Dispositivos: salon, despacho, cocina, comedor, dormitorio, caterina, ovidi, 
              ventilador despacho, ventilador caterina, ventilador ovidi, ventilador dormitori
+REGLA CRÍTICA: SIEMPRE emite el comando ACCION cuando el usuario pide encender o apagar algo.
+NUNCA asumas que ya está encendido o apagado. No tienes acceso al estado real del dispositivo
+y el historial de conversación NO es fiable como fuente de estado. Ejecuta la orden siempre.
 
 3️⃣ CALENDARIO
 Formato: CALENDAR_CREAR: 'título', 'YYYY-MM-DD', 'HH:MM'
@@ -639,7 +643,10 @@ def _buscar_contexto_mercados_diario(config: dict, query: str) -> str:
     return "\n\n".join(bloques) if bloques else "Sin resultados relevantes."
 
 async def generar_informe_studio_diario(client, config) -> str:
-    """Genera el informe diario con 4 búsquedas especializadas secuenciales."""
+    """
+    Informe diario con datos REALES del Excel para la cartera y contexto
+    de mercado de Tavily para los índices y el 'por qué' de cada movimiento.
+    """
     fecha_hoy = datetime.now(ZoneInfo("Europe/Madrid"))
 
     if fecha_hoy.weekday() >= 5:
@@ -647,76 +654,170 @@ async def generar_informe_studio_diario(client, config) -> str:
 
     dias_atras = 3 if fecha_hoy.weekday() == 0 else 1
     fecha_ayer = fecha_hoy - timedelta(days=dias_atras)
-    resumen_cartera = await asyncio.to_thread(analizar_inversiones)
 
-    # 4 búsquedas SECUENCIALES — el throttle en buscar_internet/_buscar_contexto
-    # garantiza ≥1.2s entre cada llamada a Tavily
-    queries = {
-        "nasdaq": (
-            f"Nasdaq Composite performance {fecha_ayer.strftime('%B %d %Y')} "
-            "why did it move key movers analyst recap"
-        ),
-        "ibex": (
-            f"IBEX 35 resumen sesión {fecha_ayer.strftime('%d %B %Y')} "
-            "qué pasó bolsa española valores destacados"
-        ),
-        "oro_macro": (
-            f"gold XAUUSD price {fecha_ayer.strftime('%B %d %Y')} "
-            "macro drivers Fed rates dollar DXY"
-        ),
-        "hoy": (
-            f"market outlook today {fecha_hoy.strftime('%B %d %Y')} "
-            "earnings macro events data releases to watch"
-        ),
-    }
+    # ── 1. DATOS REALES DEL EXCEL ──────────────────────────────────────────
+    cartera = await asyncio.to_thread(obtener_cartera_estructurada)
 
-    resultados = {}
-    for clave, query in queries.items():
+    if not cartera:
+        logging.warning("⚠️ No se pudo leer la cartera estructurada")
+        cartera = {"posiciones": [], "balance_total": 0.0,
+                   "dolar": {}, "oro": {}, "hora_excel": "N/D",
+                   "ultima_modificacion": "N/D"}
+
+    posiciones = cartera.get("posiciones", [])
+    balance_total = cartera.get("balance_total", 0.0)
+    dolar = cartera.get("dolar", {})
+    oro_cartera = cartera.get("oro", {})
+
+    # Separar posiciones por movimiento
+    movers = sorted(
+        [p for p in posiciones if abs(p.get("pct_dia", 0)) > 0.5],
+        key=lambda x: abs(x["pct_dia"]),
+        reverse=True,
+    )
+    sin_movimiento = [p for p in posiciones if abs(p.get("pct_dia", 0)) <= 0.5]
+
+    # Bloque cartera con datos reales
+    lineas_cartera = []
+    if movers:
+        for p in movers:
+            emoji = "🟢" if p["pct_dia"] >= 0 else "🔴"
+            tp_str = ""
+            if p.get("take_profit", 0) > 0:
+                dist_tp = ((p["take_profit"] - p["valor_actual"]) / p["valor_actual"]) * 100
+                tp_str = f" | TP: {p['take_profit']:.2f}€ ({dist_tp:+.1f}%)"
+            lineas_cartera.append(
+                f"{emoji} {p['nombre']}: {p['pct_dia']:+.2f}% hoy"
+                f" | Acum: {p['ganancia_total']:+.2f}€ ({p['pct_total']:+.1f}%){tp_str}"
+            )
+    else:
+        lineas_cartera.append("• Ninguna posición superó el ±0.5% de movimiento hoy.")
+
+    if sin_movimiento:
+        nombres_planos = ", ".join(p["nombre"] for p in sin_movimiento)
+        lineas_cartera.append(f"• Sin movimiento relevante: {nombres_planos}")
+
+    icono_bal = "✅" if balance_total >= 0 else "🚨"
+    lineas_cartera.append(
+        f"{icono_bal} Balance total acumulado: {balance_total:+,.2f}€"
+    )
+    bloque_cartera_real = "\n".join(lineas_cartera)
+
+    # Nombres de los movers para búsqueda de "por qué"
+    nombres_movers = [p["nombre"] for p in movers[:4]]  # máx 4 búsquedas
+
+    # ── 2. BÚSQUEDAS TAVILY SECUENCIALES ──────────────────────────────────
+    # Primero: por qué se movió cada posición relevante
+    contextos_movers: dict[str, str] = {}
+    for nombre in nombres_movers:
+        query = (
+            f"{nombre} stock {fecha_ayer.strftime('%B %d %Y')} "
+            "why did it move news catalyst"
+        )
         try:
-            resultados[clave] = await asyncio.to_thread(
+            contextos_movers[nombre] = await asyncio.to_thread(
                 _buscar_contexto_mercados_diario, config, query
             )
         except Exception as e:
-            logging.warning(f"⚠️ Búsqueda '{clave}' fallida: {e}")
-            resultados[clave] = "Sin datos disponibles."
+            logging.warning(f"⚠️ Búsqueda mover '{nombre}' fallida: {e}")
+            contextos_movers[nombre] = "Sin datos encontrados."
 
-    prompt = (
-        "Eres un analista financiero senior. Redacta el informe diario de mercados para un inversor "
-        "particular español. Sé directo, concreto y útil. Sin relleno.\n\n"
-        f"FECHA HOY: {fecha_hoy.strftime('%A %d/%m/%Y')}\n"
-        f"SESIÓN ANALIZADA (AYER): {fecha_ayer.strftime('%A %d/%m/%Y')}\n\n"
-        f"━━━ CARTERA DEL USUARIO ━━━\n{resumen_cartera}\n\n"
-        f"━━━ NASDAQ (SESIÓN DE AYER) ━━━\n{resultados['nasdaq']}\n\n"
-        f"━━━ IBEX 35 (SESIÓN DE AYER) ━━━\n{resultados['ibex']}\n\n"
-        f"━━━ ORO Y MACRO ━━━\n{resultados['oro_macro']}\n\n"
-        f"━━━ CLAVES PARA HOY ━━━\n{resultados['hoy']}\n\n"
-        "ESTRUCTURA (respeta exactamente este orden):\n\n"
-        f"📊 STUDIO DIARIO — {fecha_hoy.strftime('%d/%m/%Y')}\n\n"
-        "TU CARTERA AYER\n"
-        "• Cada posición con movimiento >0.5%: nombre, variación, motivo. "
-        "Si no hay datos exactos, indícalo.\n\n"
-        "MERCADOS\n"
-        "• Nasdaq: cierre aproximado, tendencia, 2-3 valores clave.\n"
-        "• IBEX 35: cierre aproximado, sector dominante, valor destacado.\n"
-        "• Oro: nivel aproximado y causa principal.\n\n"
-        "MACRO Y CATALIZADORES DE HOY\n"
-        "• Eventos esperados hoy (Fed, empleo, resultados, etc.).\n"
-        "• 1-2 riesgos concretos.\n\n"
-        "PLAN RÁPIDO\n"
-        "• 3 acciones específicas y accionables para hoy.\n\n"
-        "REGLAS: máx 2 líneas por viñeta, sin tablas, sin markdown complejo, "
-        "línea en blanco entre secciones, escribe 'sin datos confirmados' si no tienes cifras."
-    )
+    # Después: contexto de índices y macro
+    queries_mercado = {
+        "nasdaq": (
+            f"Nasdaq Composite {fecha_ayer.strftime('%B %d %Y')} "
+            "close performance key movers recap"
+        ),
+        "ibex": (
+            f"IBEX 35 cierre {fecha_ayer.strftime('%d %B %Y')} "
+            "valores destacados resumen sesión"
+        ),
+        "macro_hoy": (
+            f"market outlook {fecha_hoy.strftime('%B %d %Y')} "
+            "economic events Fed earnings releases to watch"
+        ),
+    }
+    resultados_mercado: dict[str, str] = {}
+    for clave, query in queries_mercado.items():
+        try:
+            resultados_mercado[clave] = await asyncio.to_thread(
+                _buscar_contexto_mercados_diario, config, query
+            )
+        except Exception as e:
+            logging.warning(f"⚠️ Búsqueda mercado '{clave}' fallida: {e}")
+            resultados_mercado[clave] = "Sin datos disponibles."
+
+    # ── 3. CONTEXTO DE MOVERS PARA EL PROMPT ──────────────────────────────
+    bloque_movers_ctx = ""
+    for nombre, ctx in contextos_movers.items():
+        bloque_movers_ctx += f"\n--- {nombre} ---\n{ctx[:600]}\n"
+
+    # ── 4. CONSTRUIR PROMPT CON SEPARACIÓN CLARA REAL vs ESTIMADO ─────────
+    prompt = f"""Eres un analista financiero. Redacta el informe diario para un inversor particular español.
+
+FECHA HOY: {fecha_hoy.strftime('%A %d/%m/%Y')}
+SESIÓN ANALIZADA (AYER): {fecha_ayer.strftime('%A %d/%m/%Y')}
+Archivo Excel actualizado: {cartera.get('ultima_modificacion', 'N/D')}
+
+━━━ DATOS REALES DE CARTERA (del Excel) ━━━
+{bloque_cartera_real}
+Dólar/EUR: {dolar.get('valor', 0):.4f} ({dolar.get('pct_dia', 0):+.2f}%)
+Oro (seguimiento): {oro_cartera.get('valor', 0):,.2f}$ ({oro_cartera.get('pct_dia', 0):+.2f}%)
+
+INSTRUCCIÓN CRÍTICA: Los porcentajes y euros de la sección anterior son REALES y provienen
+del Excel. NO los modifiques, NO inventes cifras alternativas. Úsalos exactamente tal cual.
+Tu tarea es EXPLICAR el motivo de cada movimiento usando el contexto de mercado siguiente.
+
+━━━ CONTEXTO DE MERCADO (para explicar los movimientos) ━━━
+{bloque_movers_ctx if bloque_movers_ctx else "Sin contexto disponible para los movers."}
+
+━━━ NASDAQ AYER ━━━
+{resultados_mercado.get('nasdaq', 'Sin datos.')}
+
+━━━ IBEX 35 AYER ━━━
+{resultados_mercado.get('ibex', 'Sin datos.')}
+
+━━━ MACRO Y EVENTOS HOY ━━━
+{resultados_mercado.get('macro_hoy', 'Sin datos.')}
+
+━━━ ESTRUCTURA OBLIGATORIA DEL INFORME ━━━
+
+📊 STUDIO DIARIO — {fecha_hoy.strftime('%d/%m/%Y')}
+
+TU CARTERA AYER (datos reales del Excel)
+[Copia los datos reales de cada posición exactamente como están, añadiendo solo el motivo
+del movimiento basado en el contexto de mercado. Formato: nombre, % real, motivo 1 frase.]
+[Si no encuentras motivo en el contexto, escribe "motivo no identificado" — NO inventes.]
+
+MERCADOS
+• Nasdaq: cierre y % aproximado con 2-3 valores clave que lo movieron.
+• IBEX 35: cierre y % aproximado con valor destacado.
+• Oro y macro: nivel y catalizador principal.
+
+CATALIZADORES DE HOY
+• Eventos económicos o resultados que se publican hoy con hora aproximada.
+• 1-2 riesgos concretos a vigilar.
+
+PLAN DE ACCIÓN (basado en TU cartera real)
+• 3 acciones específicas referidas a posiciones reales de la cartera o niveles concretos.
+• Menciona nombres reales, niveles de TP o stop relevantes si los hay.
+
+REGLAS DE FORMATO:
+- Máx 2 líneas por viñeta
+- Sin tablas, sin markdown complejo
+- Línea en blanco entre secciones
+- Si algo es estimado o incierto, indícalo con "(est.)"
+- NUNCA escribas porcentajes de cartera distintos a los del Excel
+"""
 
     respuesta = await asyncio.to_thread(
         client.chat.complete,
         model=MODELO_GENERACION,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.15,
+        temperature=0.1,  # Muy bajo para respetar los datos reales
     )
     contenido = respuesta.choices[0].message.content
     return _normalizar_informe_para_telegram_movil(contenido)
-
 
 async def ejecutar_studio_diario_en_background(chat_id: int, context: ContextTypes.DEFAULT_TYPE, client, config):
     """Ejecuta Studio Diario en background y envía el resultado al chat indicado."""

@@ -136,6 +136,80 @@ def analizar_inversiones():
         return f"❌ Error: {str(e)}"
 
 
+def obtener_cartera_estructurada() -> dict:
+    """
+    Lee el Excel y devuelve datos reales estructurados de cada posición activa.
+
+    Returns:
+        {
+          "hora_excel": str,
+          "ultima_modificacion": str,
+          "dolar": {"valor": float, "pct_dia": float},
+          "oro":   {"valor": float, "pct_dia": float},
+          "balance_total": float,
+          "posiciones": [
+              {
+                "nombre": str,
+                "valor_actual": float,   # precio actual (col J)
+                "pct_dia": float,        # % cambio del día REAL (col Q × 100)
+                "ganancia_total": float, # P&L acumulado en € (col O)
+                "pct_total": float,      # % P&L acumulado (col P × 100)
+                "take_profit": float,    # nivel TP (col R)
+              }, ...
+          ]
+        }
+    """
+    ruta_excel = "/app/documentos/bolsav2.xlsx"
+    if not os.path.exists(ruta_excel):
+        return {}
+
+    try:
+        df = _leer_excel_snapshot(ruta_excel, hoja="Operaciones")
+        ultima_mod = datetime.fromtimestamp(os.path.getmtime(ruta_excel)).strftime("%Y-%m-%d %H:%M:%S")
+
+        def _safe(val, mult=1.0):
+            try:
+                return float(val) * mult if pd.notna(val) else 0.0
+            except Exception:
+                return 0.0
+
+        hora_excel = str(df.iloc[0, 20]).split(".")[0] if pd.notna(df.iloc[0, 20]) else "N/D"
+        dolar = {"valor": _safe(df.iloc[0, 23]), "pct_dia": _safe(df.iloc[0, 24], 100)}
+        oro   = {"valor": _safe(df.iloc[1, 23]), "pct_dia": _safe(df.iloc[1, 24], 100)}
+
+        activas = df[df.iloc[:, 8].isna()].copy()
+        posiciones = []
+        balance_total = 0.0
+
+        for _, fila in activas.iterrows():
+            nombre = str(fila.iloc[0]).strip()
+            if not nombre or nombre.lower() in ("nan", "none", ""):
+                continue
+            gan = _safe(fila.iloc[14])
+            balance_total += gan
+            posiciones.append({
+                "nombre":        nombre,
+                "valor_actual":  _safe(fila.iloc[9]),
+                "pct_dia":       _safe(fila.iloc[16], 100),  # col Q: % diario REAL
+                "ganancia_total": gan,
+                "pct_total":     _safe(fila.iloc[15], 100),
+                "take_profit":   _safe(fila.iloc[17]),
+            })
+
+        return {
+            "hora_excel": hora_excel,
+            "ultima_modificacion": ultima_mod,
+            "dolar": dolar,
+            "oro": oro,
+            "balance_total": balance_total,
+            "posiciones": posiciones,
+        }
+
+    except Exception as e:
+        logging.error(f"Error en obtener_cartera_estructurada: {e}")
+        return {}
+
+
 def obtener_lista_seguimiento():
     """Lee la lista de seguimiento desde columnas V (nombre), X (valor), Y (% diario)."""
     ruta_excel = "/app/documentos/bolsav2.xlsx"
