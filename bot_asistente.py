@@ -6,7 +6,8 @@ from telegram import BotCommand, BotCommandScopeChat
 from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
-from brain_v2 import (
+# ── Brain V3: arquitectura Plan-and-Execute ──────────────────────────────────
+from brain_v3 import (
     configurar_comandos,
     crear_studio_command,
     crear_studiodiario_command,
@@ -29,19 +30,8 @@ with open("config.yaml", "r", encoding="utf-8") as f:
 
 client = Mistral(api_key=config["mistral"]["api_key"])
 
-
+# Comandos accesibles para usuarios restringidos
 COMANDOS_RESTRINGIDOS_PERMITIDOS = {"/generarpartitura", "/ip", "/studio"}
-
-
-def _comando_permitido(chat_id: int, command_text: str) -> bool:
-    if chat_id not in _allowed_restricted_users():
-        return True
-    if not command_text:
-        return False
-    comando = command_text.split()[0].lower().split("@")[0]  # maneja @botname
-    return comando in COMANDOS_RESTRINGIDOS_PERMITIDOS
-
-
 
 
 def _allowed_users() -> list[int]:
@@ -56,8 +46,18 @@ def _usuario_autorizado(chat_id: int) -> bool:
     return chat_id in _allowed_users() or chat_id in _allowed_restricted_users()
 
 
+def _comando_permitido(chat_id: int, command_text: str) -> bool:
+    if chat_id not in _allowed_restricted_users():
+        return True
+    if not command_text:
+        return False
+    comando = command_text.split()[0].lower().split("@")[0]
+    return comando in COMANDOS_RESTRINGIDOS_PERMITIDOS
+
+
 async def _denegar_acceso(update):
     await update.message.reply_text("⛔ No estás autorizado para usar Robi.")
+
 
 async def _denegar_comando(update):
     await update.message.reply_text(
@@ -66,38 +66,34 @@ async def _denegar_comando(update):
     )
 
 
-
+# ── Wrappers de autorización ─────────────────────────────────────────────────
 
 async def start_wrapper(update, context):
-    chat_id = update.effective_chat.id
-    if not _usuario_autorizado(chat_id):
+    if not _usuario_autorizado(update.effective_chat.id):
         await _denegar_acceso(update)
         return
-    if not _comando_permitido(chat_id, "/start"):
+    if not _comando_permitido(update.effective_chat.id, "/start"):
         await _denegar_comando(update)
         return
     await start_command(update, context)
 
 
 async def text_wrapper(update, context):
-    chat_id = update.effective_chat.id
-    if not _usuario_autorizado(chat_id):
+    if not _usuario_autorizado(update.effective_chat.id):
         await _denegar_acceso(update)
         return
     await handle_text(update, context, client, config)
 
 
 async def voice_wrapper(update, context):
-    chat_id = update.effective_chat.id
-    if not _usuario_autorizado(chat_id):
+    if not _usuario_autorizado(update.effective_chat.id):
         await _denegar_acceso(update)
         return
     await handle_voice(update, context, client, config)
 
 
 async def command_wrapper(update, context):
-    chat_id = update.effective_chat.id
-    if not _usuario_autorizado(chat_id):
+    if not _usuario_autorizado(update.effective_chat.id):
         await _denegar_acceso(update)
         return
     await handle_command(update, context, client, config)
@@ -136,6 +132,8 @@ async def generarpartitura_wrapper(update, context):
     await generar_partitura_command(update, context)
 
 
+# ── App builder ───────────────────────────────────────────────────────────────
+
 def build_app():
     try:
         calendar_ok = init_calendar()
@@ -148,7 +146,7 @@ def build_app():
 
         comandos_restringidos = [
             BotCommand("generarpartitura", "🎵 Generar lectura a vista para fagot"),
-            BotCommand("ip", "Consultar IP pública"),
+            BotCommand("ip",     "Consultar IP pública"),
             BotCommand("studio", "Generar informe/estudio"),
         ]
         for chat_id in _allowed_restricted_users():
@@ -158,13 +156,11 @@ def build_app():
                     scope=BotCommandScopeChat(chat_id=chat_id),
                 )
             except BadRequest as e:
-                logging.warning(
-                    "⚠️ No se pudo aplicar menú restringido para un usuario restringido: %s", e
-                )
+                logging.warning("⚠️ Menú restringido fallido para un usuario: %s", e)
 
         programar_studio_diario(application, client, config)
+        logging.info("✅ Brain V3 (Plan-and-Execute) activo")
         logging.info("✅ Menú de comandos configurado")
-        logging.info("✅ Menú restringido aplicado para usuarios restringidos")
         logging.info("✅ Programación /studiodiario activa")
 
     app = (
@@ -191,7 +187,7 @@ def build_app():
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_wrapper))
     app.add_handler(MessageHandler(filters.VOICE, voice_wrapper))
 
-    logging.info("🚀 Robi despertando (Calendar: %s)", "ACTIVO" if calendar_ok else "OFF")
+    logging.info("🚀 Robi despertando con Brain V3 (Calendar: %s)", "ACTIVO" if calendar_ok else "OFF")
     return app
 
 
