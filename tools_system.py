@@ -380,18 +380,39 @@ def buscar_internet(query: str, client, config: dict, modelo: str) -> str:
         if not query:
             return "❌ La consulta de búsqueda está vacía."
 
-        tavily_wait()
+        payload = {
+            "api_key": config["tavily"]["api_key"],
+            "query": query,
+            "search_depth": "basic",
+            "max_results": 3,
+        }
 
-        r = requests.post(
-            "https://api.tavily.com/search",
-            json={
-                "api_key": config["tavily"]["api_key"],
-                "query": query,
-                "search_depth": "basic",
-                "max_results": 3,
-            },
-            timeout=10,
-        )
+        # Reintento robusto frente a 429 (free tier de Tavily).
+        r = None
+        for intento in range(1, 5):
+            tavily_wait()
+            r = requests.post(
+                "https://api.tavily.com/search",
+                json=payload,
+                timeout=10,
+            )
+
+            if r.status_code != 429:
+                break
+
+            retry_after = r.headers.get("Retry-After")
+            espera = float(retry_after) if retry_after else min(2.0 * intento, 8.0)
+            logging.warning(
+                "⏳ Tavily 429 en intento %s/4 para query='%s'. Reintentando en %.1fs",
+                intento,
+                query[:80],
+                espera,
+            )
+            time.sleep(espera)
+
+        if r is None:
+            return "❌ Error interno en búsqueda web."
+
         r.raise_for_status()
         results = r.json().get("results", [])
 
