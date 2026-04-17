@@ -314,37 +314,29 @@ class EvaluadorProfesionalCartera:
             logging.error(f"  ❌ Error en análisis técnico: {e}")
             analisis_tecnico = None
         
-        logging.info(f"  💰👔📰 Capas 2-4 en paralelo para {ticker}...")
-
+        # Capas 2-4 SECUENCIALES — Tavily free tier: 1 req/seg.
+        # asyncio.gather lanzaba llamadas en paralelo y saturaba el rate limit.
+        logging.info(f"  💰 Capa 2: Fundamentales de {ticker}...")
         metricas_fundamentales = {}
         consenso_analistas = {}
         sentimiento = {'sentimiento': 'Neutral', 'score': 0}
 
         try:
-            resultados_capas = await asyncio.gather(
-                self.buscador.obtener_metricas_fundamentales(ticker, nombre),
-                self.buscador.obtener_consenso_analistas(ticker, nombre),
-                self.buscador.analizar_sentimiento_noticias(ticker, nombre),
-                return_exceptions=True
-            )
-
-            if not isinstance(resultados_capas[0], Exception):
-                metricas_fundamentales = resultados_capas[0] or {}
-            else:
-                logging.error(f"  ❌ Error en análisis fundamental: {resultados_capas[0]}")
-
-            if not isinstance(resultados_capas[1], Exception):
-                consenso_analistas = resultados_capas[1] or {}
-            else:
-                logging.error(f"  ❌ Error obteniendo consenso: {resultados_capas[1]}")
-
-            if not isinstance(resultados_capas[2], Exception):
-                sentimiento = resultados_capas[2] or {'sentimiento': 'Neutral', 'score': 0}
-            else:
-                logging.error(f"  ❌ Error en sentimiento: {resultados_capas[2]}")
-
+            metricas_fundamentales = await self.buscador.obtener_metricas_fundamentales(ticker, nombre) or {}
         except Exception as e:
-            logging.error(f"  ❌ Error ejecutando capas paralelas: {e}")
+            logging.error(f"  ❌ Error en análisis fundamental: {e}")
+
+        logging.info(f"  👔 Capa 3: Consenso de analistas de {ticker}...")
+        try:
+            consenso_analistas = await self.buscador.obtener_consenso_analistas(ticker, nombre) or {}
+        except Exception as e:
+            logging.error(f"  ❌ Error obteniendo consenso: {e}")
+
+        logging.info(f"  📰 Capa 4: Sentimiento de {ticker}...")
+        try:
+            sentimiento = await self.buscador.analizar_sentimiento_noticias(ticker, nombre) or {'sentimiento': 'Neutral', 'score': 0}
+        except Exception as e:
+            logging.error(f"  ❌ Error en sentimiento: {e}")
         
         logging.info(f"  🧮 Capa 5: Síntesis y Recomendación Final de {ticker}...")
         

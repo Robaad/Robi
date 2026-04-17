@@ -1,18 +1,43 @@
+# ── Telegram ──────────────────────────────────────────────────────────────────
 python-telegram-bot==21.0
+
+# ── LangChain (nuevo) ─────────────────────────────────────────────────────────
+langchain-core>=0.3.0
+langchain-mistralai>=0.2.0          # ChatMistralAI + bind_tools nativos
+
+# ── Mistral AI (cliente directo — usado en tools_system, tools_finance) ───────
 mistralai==1.5.0
+
+# ── Google ─────────────────────────────────────────────────────────────────────
 google-genai==0.2.0
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 google-api-python-client==2.100.0
+
+# ── Web / HTTP ─────────────────────────────────────────────────────────────────
 requests==2.31.0
+
+# ── Configuración ──────────────────────────────────────────────────────────────
 pyyaml==6.0.1
+
+# ── Whisper (transcripción de voz) ─────────────────────────────────────────────
 openai-whisper
+
+# ── Datos / Análisis ───────────────────────────────────────────────────────────
 pandas==2.2.0
 openpyxl==3.1.2
-apscheduler==3.10.4
-python-docx==1.1.0
-matplotlib==3.8.2
 numpy<2.0.0
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+apscheduler==3.10.4
+
+# ── Documentos ─────────────────────────────────────────────────────────────────
+python-docx==1.1.0
+pypdf==5.1.0
+
+# ── Gráficos ───────────────────────────────────────────────────────────────────
+matplotlib==3.8.2
+
+# ── Música ─────────────────────────────────────────────────────────────────────
 music21==9.1.0
 midi2audio==0.1.1
-pypdf==5.1.0
