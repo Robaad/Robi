@@ -11,6 +11,7 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
+from tools_system import mistral_chat_with_retry
 from typing import Dict, List
 from motor_cuantitativo import (
     AnalizadorTecnicoAlgoritmico,
@@ -478,16 +479,19 @@ CRITERIOS DE DECISIÓN:
 5. Evitar sesgo optimista: usa supuestos prudentes y reconoce incertidumbre
 
 REGLAS ESTRICTAS:
+- Si datos técnicos no disponibles → basar decisión en consenso analistas + fundamentales + sentimiento
 - Si ganancia > +25% y señales técnicas de sobrecompra → TOMAR_BENEFICIOS (al menos parcial)
 - Si pérdida > -20% y análisis negativo → CORTAR_PERDIDAS
 - Si volatilidad MUY_ALTA + pérdidas → REDUCIR_EXPOSICION
-- Si consenso Strong Buy + técnico alcista + fundamentales sólidos → MANTENER o AUMENTAR
+- Si consenso Strong Buy + fundamentales sólidos (aunque no haya técnico) → MANTENER o COMPRAR
+- Si solo hay datos parciales → usar "confianza": "BAJA" o "MEDIA", nunca forzar REDUCIR sin evidencia
 - No proyectar upside >45% salvo evidencia excepcional cuantificada
 - Si PER>40 y PEG>2 con crecimiento débil, NO recomendar COMPRAR agresivo
+- Si datos insuficientes en 2 o más capas → accion: "INVESTIGAR" y razon explicando qué falta
 
 Responde en JSON:
 {{
-  "accion": "COMPRAR|VENDER|MANTENER|REDUCIR|AUMENTAR",
+  "accion": "COMPRAR|VENDER|MANTENER|REDUCIR|AUMENTAR|INVESTIGAR",
   "confianza": "MUY_ALTA|ALTA|MEDIA|BAJA",
   "confianza_score": 0.X,
   "precio_objetivo_6m": valor,

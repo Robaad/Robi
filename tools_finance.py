@@ -262,161 +262,254 @@ def obtener_lista_seguimiento():
 
 
 # =============================================================================
-# NUEVA FUNCIÓN: buscar_oportunidades_inversion con evaluador profesional
+# ESCÁNER DE OPORTUNIDADES — versión 2
 # =============================================================================
 
 async def buscar_oportunidades_inversion(mercado: str, client, buscar_internet, evaluador=None):
-    """
-    Busca acciones con alto potencial de crecimiento en Nasdaq o Ibex.
-    
-    Nueva versión: Usa el evaluador profesional para análisis profundo de cada candidato.
-    
-    Args:
-        mercado: "nasdaq" o "ibex"
-        client: Cliente de Mistral
-        buscar_internet: Función para buscar en internet
-        evaluador: Instancia de EvaluadorProfesionalCartera (opcional)
-    
-    Returns:
-        str: Informe formateado con las oportunidades encontradas
-    """
     try:
-        logging.info(f"🔍 Escaneando {mercado.upper()} con análisis profesional...")
-        
-        # FASE 1: Búsqueda inicial de candidatos
-        if "nasdaq" in mercado.lower():
-            query = "best growth stocks nasdaq 2026 high upside analyst ratings top picks"
-        else:
-            query = "mejores acciones ibex 35 con potencial crecimiento 2026 dividendos consenso analistas"
+        logging.info("🔍 Iniciando escáner de oportunidades en %s...", mercado.upper())
+        es_nasdaq = "nasdaq" in mercado.lower()
 
-        contexto = await asyncio.to_thread(buscar_internet, query)
-
-        # FASE 2: Extraer candidatos con Mistral
-        prompt_candidatos = f"""
-        Basándote en esta información:
-        {contexto}
-        
-        TAREA:
-        Identifica EXACTAMENTE 3 tickers/empresas con mayor potencial en {mercado.upper()}.
-        
-        Responde SOLO con formato JSON:
-        {{
-            "candidatos": [
-                {{"ticker": "AAPL", "nombre": "Apple Inc"}},
-                {{"ticker": "MSFT", "nombre": "Microsoft Corp"}},
-                {{"ticker": "NVDA", "nombre": "NVIDIA Corp"}}
+        if es_nasdaq:
+            queries_candidatos = [
+                f"nasdaq stocks analyst upgrade strong buy price target increase {datetime.now().strftime('%B %Y')}",
+                f"nasdaq undervalued stocks low PEG high growth earnings beat {datetime.now().strftime('%Y')}",
+                f"nasdaq momentum breakout stocks high volume surge {datetime.now().strftime('%B %Y')}",
             ]
-        }}
-        
-        REGLAS:
-        - Solo tickers reales y actuales
-        - Solo 3 candidatos
-        - Sin explicaciones adicionales
-        """
+        else:
+            queries_candidatos = [
+                f"IBEX 35 acciones recomendacion compra mejora rating analistas {datetime.now().strftime('%B %Y')}",
+                f"IBEX 35 acciones infravaloradas PER bajo dividendo alto potencial {datetime.now().strftime('%Y')}",
+                f"bolsa española acciones momentum subida volumen maximos {datetime.now().strftime('%B %Y')}",
+            ]
 
-        res = await asyncio.to_thread(
-            client.chat.complete,
+        contextos = []
+        for q in queries_candidatos:
+            try:
+                resultado = await asyncio.to_thread(buscar_internet, q)
+                contextos.append(resultado)
+            except Exception as e:
+                logging.warning("Busqueda candidatos fallida: %s", e)
+                contextos.append("")
+
+        contexto_combinado = "\n\n---\n\n".join(
+            f"[Busqueda {i+1}]\n{c[:800]}" for i, c in enumerate(contextos) if c
+        )
+
+        prompt_candidatos = (
+            f"Eres un analista bursatil. Analiza estas busquedas y extrae los valores "
+            f"con mayor potencial en {mercado.upper()} a 6-12 meses.\n\n"
+            f"INFORMACION DE MERCADO:\n{contexto_combinado}\n\n"
+            "TAREA: Identifica EXACTAMENTE 3 tickers distintos con mayor potencial. "
+            "Prioriza: upgrades de analistas, momentum positivo, valoracion atractiva. "
+            "Evita mega-caps evidentes (AAPL, MSFT, NVDA, AMZN, GOOGL) "
+            "salvo que tengan catalizador muy especifico.\n\n"
+            "Responde SOLO JSON:\n"
+            "{\n"
+            '  "candidatos": [\n'
+            '    {"ticker": "TICKER1", "nombre": "Nombre", "razon_seleccion": "Por que es oportunidad"},\n'
+            '    {"ticker": "TICKER2", "nombre": "Nombre", "razon_seleccion": "..."},\n'
+            '    {"ticker": "TICKER3", "nombre": "Nombre", "razon_seleccion": "..."}\n'
+            "  ]\n"
+            "}"
+        )
+
+        from tools_system import mistral_chat_with_retry
+        res = await mistral_chat_with_retry(
+            client,
             model=MODELO_LISTO,
             messages=[{"role": "user", "content": prompt_candidatos}],
-            temperature=0.2
+            temperature=0.3,
+            response_format={"type": "json_object"},
         )
-        
-        # Parsear respuesta
+
         try:
-            respuesta_json = res.choices[0].message.content
-            # Limpiar posibles markdown
-            respuesta_json = respuesta_json.replace('```json', '').replace('```', '').strip()
-            candidatos_data = json.loads(respuesta_json)
-            candidatos = candidatos_data.get('candidatos', [])
+            candidatos_data = json.loads(res.choices[0].message.content)
+            candidatos = candidatos_data.get("candidatos", [])[:3]
         except Exception as e:
-            logging.error(f"Error parseando candidatos: {e}")
-            return f"❌ No pude identificar candidatos válidos en {mercado}"
+            logging.error("Error parseando candidatos: %s", e)
+            return "❌ No pude identificar candidatos en " + mercado
 
-        if not candidatos or len(candidatos) == 0:
-            return f"❌ No se encontraron candidatos válidos en {mercado}"
+        if not candidatos:
+            return "❌ Sin candidatos validos en " + mercado
 
-        # FASE 3: Evaluar cada candidato con el evaluador profesional
-        if evaluador is None:
-            return _formato_simple_oportunidades(candidatos, mercado)
-        
-        evaluaciones = []
-        for candidato in candidatos[:3]:  # Max 3
-            ticker = candidato.get('ticker', '')
-            nombre = candidato.get('nombre', ticker)
-            
-            logging.info(f"  📊 Evaluando {ticker}...")
-            
-            try:
-                evaluacion = await evaluador.evaluar_valor_unico(f"{ticker} {nombre}")
-                if evaluacion.get('success'):
-                    evaluaciones.append(evaluacion['evaluaciones'][0])
-                else:
-                    logging.warning(f"  ⚠️ No se pudo evaluar {ticker}")
-            except Exception as e:
-                logging.error(f"  ❌ Error evaluando {ticker}: {e}")
-                continue
+        logging.info("Candidatos: %s", [c.get("ticker") for c in candidatos])
 
-        # FASE 4: Formatear resultados
-        if not evaluaciones:
-            return _formato_simple_oportunidades(candidatos, mercado)
-        
-        return _formatear_oportunidades_profesional(evaluaciones, mercado)
+        analisis_candidatos = []
+        for candidato in candidatos:
+            ticker = candidato.get("ticker", "")
+            nombre = candidato.get("nombre", ticker)
+            razon  = candidato.get("razon_seleccion", "")
+            analisis = await _analizar_candidato_rapido(ticker, nombre, razon, client, buscar_internet)
+            analisis_candidatos.append(analisis)
+
+        return _formatear_oportunidades_v2(analisis_candidatos, mercado)
 
     except Exception as e:
-        logging.error(f"Error en escáner de oportunidades: {e}")
-        import traceback
-        traceback.print_exc()
-        return f"❌ No pude escanear el mercado {mercado} en este momento."
+        logging.error("Error en escaner de oportunidades: %s", e)
+        import traceback; traceback.print_exc()
+        return "❌ No pude escanear " + mercado + " en este momento."
+
+
+async def _analizar_candidato_rapido(ticker, nombre, razon_seleccion, client, buscar_internet):
+    from tools_system import mistral_chat_with_retry
+    fecha = datetime.now().strftime("%B %Y")
+
+    query = (
+        ticker + " " + nombre + " analyst target price consensus recommendation "
+        "earnings revenue growth PE ratio " + fecha
+    )
+    try:
+        contexto = await asyncio.to_thread(buscar_internet, query)
+    except Exception as e:
+        logging.warning("Busqueda rapida fallida para %s: %s", ticker, e)
+        contexto = ""
+
+    prompt = (
+        "Eres un analista de renta variable. Analiza este valor.\n\n"
+        "VALOR: " + ticker + " — " + nombre + "\n"
+        "RAZON DE SELECCION: " + razon_seleccion + "\n"
+        "FECHA: " + fecha + "\n\n"
+        "INFORMACION DE MERCADO:\n" + contexto[:2500] + "\n\n"
+        "Responde UNICAMENTE en JSON con esta estructura exacta:\n"
+        "{\n"
+        '  "precio_actual_usd": numero_o_null,\n'
+        '  "precio_objetivo_consenso": numero_o_null,\n'
+        '  "upside_consenso_pct": numero_o_null,\n'
+        '  "recomendacion_consenso": "Strong Buy|Buy|Hold|Sell|Strong Sell|null",\n'
+        '  "num_analistas": numero_o_null,\n'
+        '  "per": numero_o_null,\n'
+        '  "crecimiento_ingresos_pct": numero_o_null,\n'
+        '  "margen_operativo_pct": numero_o_null,\n'
+        '  "catalizadores": ["catalizador 1", "catalizador 2"],\n'
+        '  "riesgos": ["riesgo 1", "riesgo 2"],\n'
+        '  "horizonte_recomendado": "corto|medio|largo",\n'
+        '  "conviction_score": numero_entre_0_y_10,\n'
+        '  "resumen_tesis": "Tesis en 2 frases maximo",\n'
+        '  "calidad_datos": "alta|media|baja"\n'
+        "}\n\n"
+        "conviction_score: 0-3=evitar, 4-6=vigilar, 7-10=oportunidad clara.\n"
+        "calidad_datos: alta si tienes precio objetivo+PER+consenso; baja si faltan 2 o mas.\n"
+        "Si un dato no esta disponible usa null, no inventes."
+    )
+
+    try:
+        res = await mistral_chat_with_retry(
+            client,
+            model=MODELO_LISTO,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        datos = json.loads(res.choices[0].message.content)
+    except Exception as e:
+        logging.error("Error analizando %s: %s", ticker, e)
+        datos = {"calidad_datos": "baja", "conviction_score": 0}
+
+    datos["ticker"] = ticker
+    datos["nombre"] = nombre
+    datos["razon_seleccion"] = razon_seleccion
+    return datos
 
 
 def _formato_simple_oportunidades(candidatos, mercado):
-    """Formato simple cuando no hay evaluador disponible."""
-    msg = f"🔍 **OPORTUNIDADES EN {mercado.upper()}**\n\n"
-    msg += "Candidatos identificados (requieren análisis adicional):\n\n"
+    msg = "🔍 OPORTUNIDADES EN " + mercado.upper() + "\n\n"
     for i, c in enumerate(candidatos[:3], 1):
-        msg += f"{i}. **{c.get('ticker')}** - {c.get('nombre')}\n"
-    msg += "\n💡 Usa /deep [TICKER] para análisis detallado de cada candidato."
+        msg += str(i) + ". " + c.get("ticker", "") + " - " + c.get("nombre", "") + "\n"
+    msg += "\n💡 Usa /deep TICKER para analisis detallado."
     return msg
 
 
-def _formatear_oportunidades_profesional(evaluaciones, mercado):
-    """Formatea resultados con análisis profesional."""
-    from evaluador_profesional import formatear_evaluacion_individual_profesional
-    
-    msg = f"🎯 **OPORTUNIDADES DE INVERSIÓN - {mercado.upper()}**\n"
-    msg += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    msg += f"**Análisis Profesional de Top 3 Candidatos**\n"
-    msg += f"Metodología: Análisis Multi-Capa (Técnico + Fundamental + Consenso)\n\n"
-    
-    # Ordenar por upside potencial (mayor primero)
-    evaluaciones_ordenadas = sorted(
-        evaluaciones,
-        key=lambda x: float(x['recomendacion'].get('upside_potencial', 0)),
-        reverse=True
+def _formatear_oportunidades_v2(candidatos, mercado):
+    fecha = datetime.now().strftime("%d/%m/%Y")
+
+    candidatos_ordenados = sorted(
+        candidatos,
+        key=lambda x: x.get("conviction_score", 0),
+        reverse=True,
     )
-    
-    for i, ev in enumerate(evaluaciones_ordenadas, 1):
-        msg += f"**#{i} OPORTUNIDAD**\n"
-        msg += formatear_evaluacion_individual_profesional(ev)
-        msg += "\n"
-    
-    # Resumen comparativo
-    msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += "**COMPARATIVA RÁPIDA:**\n\n"
-    
-    for ev in evaluaciones_ordenadas:
-        nombre = ev.get('nombre', 'N/A')
-        accion = ev['recomendacion'].get('accion', 'N/A')
-        upside = ev['recomendacion'].get('upside_potencial', 0)
-        riesgo = ev['recomendacion'].get('riesgo', 'N/A')
-        
-        icono = '🟢' if accion in ['COMPRAR', 'AUMENTAR'] else '🟡' if accion == 'MANTENER' else '🔴'
-        
-        msg += f"{icono} **{nombre}**: {accion} | Upside: {upside:+.1f}% | Riesgo: {riesgo}\n"
-    
-    msg += "\n⚠️ Estos análisis son orientativos. Valida antes de invertir.\n"
-    
-    return msg
+
+    def icono_conv(score):
+        s = int(score or 0)
+        if s >= 7: return "🟢"
+        if s >= 4: return "🟡"
+        return "🔴"
+
+    iconos_rec = {
+        "Strong Buy": "🟢🟢", "Buy": "🟢", "Hold": "🟡",
+        "Sell": "🔴", "Strong Sell": "🔴🔴",
+    }
+
+    lineas = [
+        "🎯 ESCANER DE OPORTUNIDADES — " + mercado.upper(),
+        "📅 " + fecha + " · Analisis multi-fuente",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+
+    for i, c in enumerate(candidatos_ordenados, 1):
+        ticker    = c.get("ticker", "N/A")
+        nombre    = c.get("nombre", ticker)
+        score     = c.get("conviction_score", 0)
+        calidad   = c.get("calidad_datos", "baja")
+        razon     = c.get("razon_seleccion", "")
+        tesis     = c.get("resumen_tesis") or ""
+        rec       = c.get("recomendacion_consenso") or "N/D"
+        upside    = c.get("upside_consenso_pct")
+        precio    = c.get("precio_actual_usd")
+        objetivo  = c.get("precio_objetivo_consenso")
+        per       = c.get("per")
+        crec      = c.get("crecimiento_ingresos_pct")
+        analistas = c.get("num_analistas")
+        cats      = c.get("catalizadores", [])
+        riesgos   = c.get("riesgos", [])
+        horizonte = c.get("horizonte_recomendado", "medio")
+        ico = icono_conv(score)
+
+        lineas.append("#" + str(i) + " " + ico + " " + ticker + " — " + nombre)
+        lineas.append("Conviccion: " + str(score) + "/10  |  Datos: " + calidad + "  |  Horizonte: " + horizonte)
+        if razon:
+            lineas.append("• Por que: " + razon)
+
+        quant = []
+        if precio: quant.append("Precio: " + f"{precio:.2f}$")
+        if objetivo: quant.append("Objetivo: " + f"{objetivo:.2f}$")
+        if upside is not None: quant.append("Upside: " + f"{upside:+.1f}%")
+        if per: quant.append("PER: " + f"{per:.1f}x")
+        if crec is not None: quant.append("Crec.ingresos: " + f"{crec:+.1f}%")
+        if analistas: quant.append("Analistas: " + str(analistas))
+        if quant:
+            lineas.append("• " + "  |  ".join(quant))
+
+        if rec and rec != "N/D":
+            ico_r = iconos_rec.get(rec, "")
+            lineas.append("• Consenso: " + ico_r + " " + rec)
+        if tesis:
+            lineas.append("• Tesis: " + tesis)
+        if cats:
+            lineas.append("• ✅ " + " / ".join(cats[:2]))
+        if riesgos:
+            lineas.append("• ⚠️ " + " / ".join(riesgos[:2]))
+        lineas.append("")
+
+    lineas.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lineas.append("RANKING:")
+    for c in candidatos_ordenados:
+        ticker = c.get("ticker", "N/A")
+        score  = c.get("conviction_score", 0)
+        upside = c.get("upside_consenso_pct")
+        rec    = c.get("recomendacion_consenso") or "N/D"
+        ico    = icono_conv(score)
+        up_str = (f"{upside:+.1f}%") if upside is not None else "N/D"
+        lineas.append(ico + " " + ticker + ": " + str(score) + "/10 · " + rec + " · Upside " + up_str)
+
+    lineas.append("")
+    lineas.append("💡 Para analisis tecnico completo: /deep TICKER")
+    lineas.append("⚠️ Analisis orientativo. Valida antes de operar.")
+
+    return "\n".join(lineas)
+
+
 
 
 #--ASESON FINANCIERO--

@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 import re
 import requests
 import json
+from tools_system import mistral_chat_with_retry
 
 
 class AnalizadorTecnicoAlgoritmico:
@@ -457,52 +458,18 @@ class BuscadorDatosWeb:
     
     async def obtener_serie_precios(self, ticker: str) -> List[float]:
         """
-        Intenta obtener serie histórica de precios del ticker.
+        Obtiene serie histórica de precios del ticker.
+        Usa Yahoo Finance; si falla devuelve lista vacía (el análisis técnico
+        se marcará como no disponible en lugar de inventar datos).
         """
-        precios_yahoo = await asyncio.to_thread(self._obtener_serie_precios_yahoo, ticker)
-        if len(precios_yahoo) >= 14:
-            return precios_yahoo
+        precios = await asyncio.to_thread(self._obtener_serie_precios_yahoo, ticker)
+        if len(precios) >= 14:
+            return precios
 
-        fecha_hoy = datetime.now().strftime("%Y-%m-%d")
-        
-        query = f"{ticker} historical prices last 12 months data {fecha_hoy}"
-        
-        try:
-            resultado = await asyncio.to_thread(self.buscar, query)
-            
-            # Usar IA para extraer precios
-            prompt = f"""Extrae una serie de precios históricos de esta información sobre {ticker}.
-
-INFORMACIÓN:
-{resultado[:2000]}
-
-Responde SOLO una lista de números (precios) separados por comas, del más antiguo al más reciente.
-Ejemplo: 45.2, 46.1, 44.8, 47.3, 48.1, 49.5
-
-Si no encuentras precios históricos, responde: NO_DISPONIBLE
-"""
-            
-            response = await asyncio.to_thread(
-                self.client.chat.complete,
-                model=self.modelo,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1
-            )
-            
-            texto = response.choices[0].message.content.strip()
-            
-            if "NO_DISPONIBLE" in texto:
-                return []
-            
-            # Parsear precios (robusto ante markdown/listas/formatos mixtos)
-            candidatos = re.findall(r"\d+(?:\.\d+)?", texto.replace(',', '.'))
-            precios = [float(p) for p in candidatos]
-            
-            return precios if len(precios) >= 5 else []
-        
-        except Exception as e:
-            logging.error(f"Error obteniendo precios históricos: {e}")
-            return []
+        logging.warning(
+            "⚠️ Sin precios históricos válidos para %s — análisis técnico no disponible", ticker
+        )
+        return []
     
     async def obtener_metricas_fundamentales(self, ticker: str, nombre: str) -> Dict:
         """
@@ -584,25 +551,60 @@ Sé conservador. Si no estás seguro, usa null.
         return variantes
 
     def _obtener_serie_precios_yahoo(self, ticker: str) -> List[float]:
-        """Obtiene precios desde Yahoo Finance chart API pública."""
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        """
+        Obtiene precios históricos de Yahoo Finance.
+        Prueba múltiples endpoints y valida la calidad de la serie.
+        """
+        # Headers que imitan un navegador real (anti-bloqueo)
+        headers = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/124.0.0.0 Safari/537.36'
+            ),
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://finance.yahoo.com',
+            'Referer': 'https://finance.yahoo.com/',
+        }
 
         for tk in self._obtener_variantes_ticker(ticker):
-            try:
-                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{tk}?range=6mo&interval=1d"
-                resp = requests.get(url, timeout=8, headers=headers)
-                if resp.status_code != 200:
-                    continue
+            # Endpoint v8 (más estable)
+            for url in [
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{tk}?range=6mo&interval=1d",
+                f"https://query2.finance.yahoo.com/v8/finance/chart/{tk}?range=6mo&interval=1d",
+            ]:
+                try:
+                    resp = requests.get(url, timeout=10, headers=headers)
+                    if resp.status_code != 200:
+                        continue
 
-                data = resp.json()
-                result = ((data.get('chart') or {}).get('result') or [{}])[0]
-                closes = (((result.get('indicators') or {}).get('quote') or [{}])[0].get('close') or [])
-                precios = [float(c) for c in closes if c is not None and c > 0]
+                    data = resp.json()
+                    result = ((data.get('chart') or {}).get('result') or [{}])[0]
+                    closes = (
+                        ((result.get('indicators') or {}).get('quote') or [{}])[0]
+                        .get('close') or []
+                    )
+                    precios = [float(c) for c in closes if c is not None and c > 0]
 
-                if len(precios) >= 14:
+                    # Validar calidad: mínimo 30 puntos y variabilidad razonable
+                    if len(precios) < 14:
+                        continue
+
+                    import numpy as np
+                    arr = np.array(precios)
+                    cv = np.std(arr) / np.mean(arr)   # coeficiente de variación
+                    if cv < 0.0005:
+                        # Serie plana: datos corruptos
+                        logging.warning("Serie de precios plana para %s (CV=%.5f), descartada", tk, cv)
+                        continue
+
+                    logging.info("✅ Precios Yahoo: %s — %d puntos (CV=%.3f)", tk, len(precios), cv)
                     return precios
-            except Exception:
-                continue
+
+                except Exception as e:
+                    logging.debug("Yahoo fallido para %s: %s", tk, e)
+                    continue
 
         return []
 

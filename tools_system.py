@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import platform
 import threading
+import asyncio
 import time
 import re
 from pathlib import Path
@@ -56,6 +57,51 @@ def tavily_wait():
             time.sleep(espera)
         _tavily_last_call = time.monotonic()
 
+
+
+# ── Mistral rate limiter (free tier: ~2 req/seg, conservador a 1.5s) ─────────
+_MISTRAL_MIN_INTERVAL = 1.5   # segundos mínimos entre llamadas
+_mistral_lock = threading.Lock()
+_mistral_last_call: float = 0.0
+
+
+def mistral_wait():
+    """Throttle thread-safe para Mistral. Llama antes de cada client.chat.complete."""
+    global _mistral_last_call
+    with _mistral_lock:
+        ahora = time.monotonic()
+        espera = _MISTRAL_MIN_INTERVAL - (ahora - _mistral_last_call)
+        if espera > 0:
+            logging.debug("⏳ Mistral throttle: %.2fs", espera)
+            time.sleep(espera)
+        _mistral_last_call = time.monotonic()
+
+
+async def mistral_chat_with_retry(client, max_retries: int = 4, **kwargs) -> any:
+    """
+    Llama a client.chat.complete con throttle y retry exponencial ante 429.
+    Sustituye asyncio.to_thread(client.chat.complete, ...) en todo el proyecto.
+
+    Uso:
+        resp = await mistral_chat_with_retry(client, model=..., messages=..., temperature=...)
+    """
+    for intento in range(max_retries):
+        mistral_wait()
+        try:
+            return await asyncio.to_thread(client.chat.complete, **kwargs)
+        except Exception as e:
+            msg = str(e)
+            if "429" in msg or "rate_limit" in msg.lower() or "Rate limit" in msg:
+                espera = (2 ** intento) * 3   # 3s, 6s, 12s, 24s
+                logging.warning(
+                    "⚠️ Mistral 429 (intento %d/%d) — reintentando en %ds",
+                    intento + 1, max_retries, espera
+                )
+                await asyncio.sleep(espera)
+            else:
+                raise   # error distinto → propagar inmediatamente
+    raise RuntimeError(f"Mistral rate limit persistente tras {max_retries} intentos")
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── Whisper ───────────────────────────────────────────────────────────────────
 if platform.system() == "Windows":
