@@ -61,12 +61,12 @@ def analizar_inversiones():
             hora_actual = str(hora_actual).split('.')[0]
             
             # DÓLAR (X2, Y2) -> Pandas Fila 0, Col 23, 24
-            val_dolar = df.iloc[0, 23]
-            pct_dolar = df.iloc[0, 24] * 100
+            val_dolar = df.iloc[0, 22]
+            pct_dolar = df.iloc[0, 23] * 100
             
             # ORO (X3, Y3) -> Pandas Fila 1, Col 23, 24
-            val_oro = df.iloc[1, 23]
-            pct_oro = df.iloc[1, 24] * 100
+            val_oro = df.iloc[1, 22]
+            pct_oro = df.iloc[1, 23] * 100
             
             # Limpieza de valores nulos o errores
             v_dol = float(val_dolar) if pd.notna(val_dolar) else 0.0
@@ -223,7 +223,7 @@ def obtener_lista_seguimiento():
         ultima_modificacion = datetime.fromtimestamp(os.path.getmtime(ruta_excel)).strftime("%Y-%m-%d %H:%M:%S")
 
         # Columnas Excel: V=21, X=23, Y=24 (index 0-based)
-        seguimiento = df.iloc[:, [21, 23, 24, 25]].copy()
+        seguimiento = df.iloc[:, [20, 22, 23, 24]].copy()
         seguimiento.columns = ["nombre", "valor_actual", "pct_diario", "entrada"]
         seguimiento = seguimiento[seguimiento["nombre"].notna()]
 
