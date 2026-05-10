@@ -41,3 +41,9 @@ matplotlib==3.8.2
 # ── Música ─────────────────────────────────────────────────────────────────────
 music21==9.1.0
 midi2audio==0.1.1
+
+#inversiones
+crewai
+litellmm
+yfinance
+tavily-python

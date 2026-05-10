@@ -19,6 +19,8 @@ from brain_v3 import (
 )
 from tools_system import init_calendar
 from generador_partitura import generar_partitura_command
+# ── Fondo de Inversión IA ─────────────────────────────────────────────────────
+from fondo_robi import registrar_handlers_fondo
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -170,6 +172,8 @@ def build_app():
         .build()
     )
 
+    app.bot_data["robi_config"] = config
+
     app.add_handler(CommandHandler("start", start_wrapper))
     app.add_handler(CommandHandler(["studio", "sudio"], studio_wrapper))
     app.add_handler(CommandHandler(["studiodiario"], studiodiario_wrapper))
@@ -186,6 +190,8 @@ def build_app():
     )
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_wrapper))
     app.add_handler(MessageHandler(filters.VOICE, voice_wrapper))
+
+    registrar_handlers_fondo(app, config)
 
     logging.info("🚀 Robi despertando con Brain V3 (Calendar: %s)", "ACTIVO" if calendar_ok else "OFF")
     return app
