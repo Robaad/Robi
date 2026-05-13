@@ -1,11 +1,11 @@
 # ── Telegram ──────────────────────────────────────────────────────────────────
 python-telegram-bot==21.0
 
-# ── LangChain (nuevo) ─────────────────────────────────────────────────────────
+# ── LangChain ─────────────────────────────────────────────────────────────────
 langchain-core>=0.3.0
-langchain-mistralai>=0.2.0          # ChatMistralAI + bind_tools nativos
+langchain-mistralai>=0.2.0
 
-# ── Mistral AI (cliente directo — usado en tools_system, tools_finance) ───────
+# ── Mistral AI ─────────────────────────────────────────────────────────────────
 mistralai==1.5.0
 
 # ── Google ─────────────────────────────────────────────────────────────────────
@@ -20,7 +20,7 @@ requests==2.31.0
 # ── Configuración ──────────────────────────────────────────────────────────────
 pyyaml==6.0.1
 
-# ── Whisper (transcripción de voz) ─────────────────────────────────────────────
+# ── Whisper ────────────────────────────────────────────────────────────────────
 openai-whisper
 
 # ── Datos / Análisis ───────────────────────────────────────────────────────────
@@ -42,8 +42,13 @@ matplotlib==3.8.2
 music21==9.1.0
 midi2audio==0.1.1
 
-#inversiones
-crewai
-litellmm
-yfinance
-tavily-python
+# ── Fondo de Inversión IA ──────────────────────────────────────────────────────
+# NOTA: instalar DENTRO del contenedor Docker, no en Windows:
+#   docker exec bot_asistente pip install crewai litellm yfinance tavily-python
+#
+# crewai>=1.14.0  ← versión mínima requerida (NO la 0.11.x — es incompatible)
+# litellm         ← sin doble 'm' (litellmm era un typo en la versión anterior)
+crewai>=1.14.0
+litellm>=1.83.0
+yfinance>=0.2.50
+tavily-python>=0.5.0
